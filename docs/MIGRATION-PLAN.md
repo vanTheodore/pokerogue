@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Pagefault Games
+
+SPDX-License-Identifier: CC-BY-NC-SA-4.0
+-->
+
 # Migración de PokéRogue a SvelteKit + Bun (+ Elysia en fase posterior)
 
 > **Estado:** Fase A (auditoría y diseño) completada · Fase B (integración inicial de SvelteKit) implementada y ejecutable.

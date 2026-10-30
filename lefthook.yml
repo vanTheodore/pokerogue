@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# Commands run through Bun (see docs/MIGRATION-PLAN.md). The upstream pnpm-based CI
-# workflows are unaffected: they invoke the scripts directly rather than these hooks.
+# Hooks prefer Bun and fall back to pnpm, so contributors using either toolchain keep
+# working (see docs/MIGRATION-PLAN.md). The CI workflows invoke the scripts directly
+# and are unaffected by these hooks.
 
 pre-commit:
   skip:
@@ -13,21 +14,21 @@ pre-commit:
     biome-lint:
       # Disable colors as certain IDEs (such as VSCode) don't support it in the output pane.
       # Summary mode looks decent in plain ASCII anyhow
-      run: bun run biome:staged --colors=off --reporter=summary
+      run: if command -v bun >/dev/null 2>&1; then bun run biome:staged --colors=off --reporter=summary; else pnpm biome:staged --colors=off --reporter=summary; fi
       stage_fixed: true
     ls-lint:
-      run: bunx ls-lint
+      run: if command -v bun >/dev/null 2>&1; then bunx ls-lint; else pnpm exec ls-lint; fi
 
 post-merge:
   commands:
     update-submodules:
-      run: bun run update-submodules
+      run: if command -v bun >/dev/null 2>&1; then bun run update-submodules; else pnpm update-submodules; fi
     update-packages:
-      run: bun install
+      run: if command -v bun >/dev/null 2>&1; then bun install; else pnpm install; fi
 
 post-checkout:
   commands:
     update-packages:
       # cf https://git-scm.com/docs/githooks#_post_checkout:
       # The 3rd argument is 1 for branch checkouts and 0 for file checkouts.
-      run: if test {3} -eq "1"; then bun install; fi
+      run: if test {3} -eq "1"; then if command -v bun >/dev/null 2>&1; then bun install; else pnpm install; fi; fi
