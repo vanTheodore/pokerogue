@@ -506,6 +506,7 @@ Los workflows de upstream (pnpm) **se conservan y vuelven a estar en verde**: su
 | `bun run build:kit` (SvelteKit) | ✅ `build/` estático con `index.html` + `200.html` |
 | `bun run preview:kit` (artefacto estático) | ✅ `GET /` 200, CSS 8.200 B |
 | **`bunx playwright test` (Chromium real, WebGL por software)** | ✅ **6/6 pruebas** (`e2e/app.spec.ts`), incluida la partida completa hasta el primer turno de combate, y el remontaje por navegación cliente |
+| **CI del PR (todos los workflows)** | ✅ 17/17 checks en verde: `Bun CI`, `E2E (Chromium)` (4 min 17 s), los 5 shards de tests de upstream, `Run all linters`, `Game Data Exporter`, `Lint PR title`, REUSE |
 | Hosts del dev server (`allowedHosts`) | ✅ `localhost` 200 · host de preview explícito 200 · host arbitrario **403** (§13.4) |
 | Subconjunto de la suite heredada (`api` + `utils` + `scenes`) | ✅ **163 pasan / 4 fallan / 2 ficheros fallan**, idéntico al baseline `d7a5ecd` (§11.2) |
 | Suite Vitest completa | ⚠️ No completada en este entorno (3 GB RAM); se ejecuta en el CI de upstream |
