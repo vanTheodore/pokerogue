@@ -180,6 +180,10 @@ test.describe("Gameplay", () => {
 
     await press(page, "Enter", 1_500);
 
+    /** Menus in which SUBMIT means "commit this choice" rather than "advance a message". */
+    const isChoiceMenu = (snapshot: ProbeSnapshot): boolean =>
+      snapshot.uiModeName === "COMMAND" || snapshot.uiModeName === "FIGHT" || snapshot.uiModeName === "TARGET_SELECT";
+
     /**
      * Wait for a *terminal* battle state, never a transitional one.
      *
@@ -203,7 +207,28 @@ test.describe("Gameplay", () => {
       return (nextTurn && backToPlayer) || encounterOver;
     };
 
-    const afterFirstTurn = await waitForProbe(page, turnResolved, "the first turn to resolve", 180_000);
+    /**
+     * Choose until the turn ends, pressing SUBMIT in every choice menu.
+     *
+     * @remarks
+     * The first encounter is not always a single battle: a double battle asks for a target
+     * (`TARGET_SELECT`) after the move is picked, and asks the second Pokémon of the party to
+     * choose afterwards (`COMMAND` → `FIGHT` → move). A player keeps pressing until the turn
+     * ends; doing the same here keeps the test about *the battle resolving* instead of about
+     * the exact sequence of menus a particular encounter happens to show.
+     */
+    const deadline = Date.now() + 180_000;
+    let current = (await probe(page))!;
+    while (!turnResolved(current) && Date.now() < deadline) {
+      if (isChoiceMenu(current)) {
+        await press(page, "Enter", 2_000);
+      } else {
+        await page.waitForTimeout(1_000);
+      }
+      current = (await probe(page))!;
+    }
+
+    const afterFirstTurn = await waitForProbe(page, turnResolved, "the first turn to resolve", 60_000);
 
     // A move really ran: PP is spent when a move is used, whatever the outcome (hit, miss or
     // a type immunity), so this cannot be satisfied by a UI transition.
@@ -216,6 +241,12 @@ test.describe("Gameplay", () => {
     expect(afterFirstTurn.playerMaxHp).toBeGreaterThan(0);
     expect(afterFirstTurn.enemyHp).toBeGreaterThanOrEqual(0);
     expect(afterFirstTurn.enemyHp).toBeLessThanOrEqual(afterFirstTurn.enemyMaxHp!);
+
+    // Guest saves are written as the run starts; the build-only spec covers restoral.
+    const savedSlots = await page.evaluate(() =>
+      Object.keys(localStorage).filter(key => key.startsWith("sessionData") || key.startsWith("data_")),
+    );
+    expect(savedSlots.length).toBeGreaterThan(0);
 
     // Keep the outcome in the report so a failure is diagnosable from the CI log alone.
     test.info().annotations.push({

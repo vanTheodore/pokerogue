@@ -14,7 +14,9 @@ import { type GameHostSnapshot, gameHost } from "./game-host";
  * in-app link does — without exposing anything in production and without adding UI that only
  * tests use:
  *
- * - it is only installed when the page component runs in development (`import.meta.env.DEV`);
+ * - it is only installed in development builds, or in a build that opted in explicitly with
+ *   `VITE_ENABLE_DEBUG_BRIDGE=1` (the preview artifact the E2E suite runs against, see
+ *   `docs/PREVIEW.md`). A normal production build never carries it;
  * - nothing is installed as a side effect of importing the host: the page calls
  *   {@linkcode installDebugBridge} on mount, so unit tests never touch `window`;
  * - `$app/navigation` is imported here (not in `game-host.ts`) so the Vitest suite, which does
@@ -49,6 +51,16 @@ export interface PokerogueProbe {
   /** How many Pokémon the enemy still has, `null` outside of a battle. */
   readonly enemyPartySize: number | null;
   /**
+   * Save slot the scene is currently working with, `null` until one is selected.
+   *
+   * @remarks
+   * On the title screen this is set only when the game *found and loaded* a saved session for
+   * the last slot used by this player (`TitlePhase.checkLastSaveSlot`), which is how the E2E
+   * suite proves that a guest save written to `localStorage` is actually readable after a
+   * reload — not merely still present.
+   */
+  readonly sessionSlotId: number | null;
+  /**
    * PP consumed by each move of the player's lead Pokémon.
    *
    * @remarks
@@ -59,7 +71,19 @@ export interface PokerogueProbe {
   readonly leadMovePpUsed: readonly number[];
 }
 
-/** Shape exposed on `window.__pokerogueHost__` in development builds. */
+/**
+ * Whether this build exposes the bridge.
+ *
+ * @remarks
+ * `import.meta.env.DEV` covers the dev server. A *built* artifact can opt in with
+ * `VITE_ENABLE_DEBUG_BRIDGE=1`, which is what lets the Playwright suite run against the real
+ * static build instead of only against the dev server — the production build is otherwise
+ * unobservable, and "the dev server boots" says nothing about the artifact that gets deployed.
+ * The flag is compile-time: a build without it contains no bridge at all.
+ */
+const DEBUG_BRIDGE_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEBUG_BRIDGE === "1";
+
+/** Shape exposed on `window.__pokerogueHost__`. */
 export interface PokerogueDebugBridge {
   /** Lifecycle snapshot of the host (status, error, instances created, leases). */
   snapshot: () => GameHostSnapshot;
@@ -85,7 +109,7 @@ declare global {
  * points at the same singleton host.
  */
 export function installDebugBridge(): void {
-  if (!import.meta.env.DEV || typeof window === "undefined") {
+  if (!DEBUG_BRIDGE_ENABLED || typeof window === "undefined") {
     return;
   }
 
@@ -112,6 +136,7 @@ export function installDebugBridge(): void {
         playerHp: globalScene.getPlayerParty?.()[0]?.hp ?? null,
         playerMaxHp: globalScene.getPlayerParty?.()[0]?.getMaxHp() ?? null,
         enemyPartySize: globalScene.getEnemyParty?.().length ?? null,
+        sessionSlotId: globalScene.sessionSlotId ?? null,
         leadMovePpUsed:
           globalScene
             .getPlayerParty?.()[0]

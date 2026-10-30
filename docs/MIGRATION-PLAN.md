@@ -36,6 +36,10 @@ Esta fase entrega:
 | Build heredado (MPA) sin regresión de bundle | ✅ Medido (+0.5 kB, ver §10) |
 | Suite Vitest heredada | ⏳ En ejecución al cerrar la fase (ver §11) |
 | Verificación en navegador real (Playwright) | ✅ **6/6 pruebas** en Chromium real, local y en CI (§11.1) |
+| Verificación del **artefacto compilado** (`build/`, `adapter-static`) | ✅ **12/12 pruebas** de Playwright contra el build servido estáticamente (§14) |
+| `svelte-check` sobre componentes `.svelte` | ✅ 0 errores, 0 avisos (2 576 ficheros) |
+| Fronteras host ↔ juego en `dependency-cruiser` | ✅ 4 reglas nuevas, verificadas con violaciones temporales (§14.2) |
+| Viabilidad de preview en Cloudflare Workers Free | ❌ **No cabe**: 31 163 ficheros frente a 20 000 (`docs/PREVIEW.md` §5) |
 | Backend Elysia | ❌ Fase D (no iniciada, a propósito) |
 
 **Lo que NO se ha hecho, y por qué:** no se migró el backend (el usuario lo pidió explícitamente),
@@ -503,9 +507,12 @@ Los workflows de upstream (pnpm) **se conservan y vuelven a estar en verde**: su
 | `bunx vitest run test/tests/host` | ✅ **53/53 pruebas, 7 ficheros** (ciclo de vida de la página y del host, carreras, reintento tras fallo de arranque, imports de rutas, paridad de shell, espejo Bun↔pnpm) |
 | `bunx tsc -p e2e/tsconfig.json` | ✅ |
 | `bun run build` (pipeline heredado) | ✅ `dist/` completo, `asset-manifest.json`, shell reescrito |
-| `bun run build:kit` (SvelteKit) | ✅ `build/` estático con `index.html` + `200.html` |
+| `bun run build:kit` (SvelteKit) | ✅ `build/` estático con `index.html` + `200.html` (**sin** `locales/`: el artefacto desplegable es `build:preview`, ver §14.1) |
 | `bun run preview:kit` (artefacto estático) | ✅ `GET /` 200, CSS 8.200 B |
 | **`bunx playwright test` (Chromium real, WebGL por software)** | ✅ **6/6 pruebas** (`e2e/app.spec.ts`), incluida la partida completa hasta el primer turno de combate, y el remontaje por navegación cliente |
+| **`bunx playwright test --config playwright.build.config.ts`** (artefacto servido estáticamente) | ✅ **12/12 pruebas** (6 de `app.spec.ts` + 6 de `preview.spec.ts`), ≈ 7 min |
+| `bun run svelte-check` | ✅ 0 errores (descarta un error de tipo inyectado a propósito en un `.svelte`) |
+| `bun run depcruise` | ✅ 1 269 módulos, 0 violaciones; las 4 reglas nuevas fallan con violaciones inyectadas |
 | **E2E del primer turno (endurecido)** | ✅ No acepta estados intermedios: exige `turn` avanzado **y** vuelta a `CommandPhase`/`COMMAND`, o el fin del encuentro; además **PP gastado** (`leadMovePpUsed + 1`) y un `enemyHp` coherente con su máximo |
 | **CI del PR (todos los workflows)** | ✅ 17/17 checks en verde: `Bun CI`, `E2E (Chromium)` (4 min 17 s), los 5 shards de tests de upstream, `Run all linters`, `Game Data Exporter`, `Lint PR title`, REUSE |
 | Hosts del dev server (`allowedHosts`) | ✅ `localhost` 200 · host de preview explícito 200 · host arbitrario **403** (§13.4) |
@@ -771,16 +778,98 @@ se adjunta como anotación del test para poder diagnosticar un fallo desde el lo
 
 ---
 
-## 14. Próxima fase recomendada
+## 14. Fase C.1 — artefacto compilado, `svelte-check`, fronteras y viabilidad de preview
+
+Objetivo: dejar de validar solo el dev server. Detalle y medidas completas en
+[`docs/PREVIEW.md`](PREVIEW.md).
+
+### 14.1 El artefacto, ejecutado de verdad
+
+`bun run build:preview` construye en modo **producción** (el modo decide sourcemaps, tree-shaking y
+minificación: un "modo preview" inventado habría producido otro bundle), copia `locales/` e inspecciona
+el resultado. La inspección **falla** si falta `index.html`/`200.html`, `locales/en/menu.json`,
+`images/` o `fonts/`, si el bundle referencia `api.pokerogue.net`, o si el puente de observación
+aparece (o falta) sin que se haya pedido.
+
+Lo que esto encontró:
+
+- **Las traducciones no estaban en el build.** El juego las pide en tiempo de ejecución
+  (`./locales/<lang>/<ns>.json`, 96 peticiones solo hasta el título); en dev Vite las sirve por
+  accidente desde la raíz del proyecto. `adapter-static` solo copia `kit.files.assets`. La primera
+  versión del arreglo —un hook `closeBundle` en `vite.config.app.ts`— copiaba *antes* de que el
+  adaptador escribiera `build/`, así que el adaptador la sobrescribía; ahora se hace en
+  `scripts/preview/stage-locales.ts`, después de que Vite termine.
+- **`kit.files.assets` acepta un solo directorio** en SvelteKit 3, así que no hay forma declarativa
+  de sumar `locales/`.
+- **Un build de producción apunta a `https://api.pokerogue.net`** (`.env.production`). La preview
+  fuerza `VITE_BYPASS_LOGIN=1` y un `VITE_SERVER_URL` inalcanzable, y la inspección lo verifica.
+- **El puente de observación es de desarrollo.** Ahora se puede activar en un build con
+  `VITE_ENABLE_DEBUG_BRIDGE=1`; sin el flag, el artefacto no contiene el puente. Eso es lo que hace
+  testeable el artefacto sin publicarlo.
+
+Resultado: `playwright.build.config.ts` sirve `build/` con `scripts/preview/serve-build.ts` (semántica
+de host estático) y ejecuta **las mismas** pruebas de aceptación: 6/6 de `app.spec.ts` (incluido el
+primer turno) más 6 de `preview.spec.ts` (cabeceras, manifest, fallback SPA, service worker,
+traducciones, guardado de invitado). Medidas: 31 163 ficheros / 314.7 MiB; 1 177 peticiones y
+31.3 MiB para llegar al título.
+
+### 14.2 Fronteras en `dependency-cruiser`
+
+Cuatro reglas nuevas en `.dependency-cruiser.cjs`, todas comprobadas inyectando una violación real:
+
+| Regla | Impide | Disparó con |
+| --- | --- | --- |
+| `game-not-to-host` | que el juego dependa de `src/host` (salvo `src/main.ts`, que comparte `bootGame`) | `src/utils/x.ts → src/host/game-host.ts` |
+| `game-not-to-svelte` | que el código de juego importe `svelte`/`@sveltejs/*` | `src/utils/x.ts → node_modules/svelte` |
+| `host-not-to-sveltekit-app-modules` | `$app/*` en el host (salvo el `import()` dinámico de `debug-bridge.ts`) | `src/host/x.ts → $app/navigation` |
+| `host-not-to-routes` | que el host importe componentes de ruta | (ruta excluida del crucero por convención; la cubre además `route-imports.test.ts`) |
+
+`src/routes/` sigue excluido del crucero porque sus ficheros se resuelven por convención, no por
+imports (ver `options.exclude`); sus fronteras las cubren `test/tests/host/route-imports.test.ts` y
+`shell-parity.test.ts`.
+
+**No se ha introducido `ServiceRegistry`**: no hay todavía un caso que falle sin él.
+
+### 14.3 `svelte-check`
+
+`bun run svelte-check` con el `tsconfig.json` del juego y `--config vite.config.app.ts` (SvelteKit 3
+lee su configuración del plugin de Vite, no de `svelte.config.js`). 2 576 ficheros, 0 errores. Se
+verificó que **discrimina** inyectando `const oops: number = "not a number"` en un `.svelte`: sale un
+error con fichero y línea.
+
+Descartado: un `tsconfig.kit.json` que limitara el alcance a `src/host` + `src/routes`. Al reducir el
+`include`, svelte-check dejaba de cargar declaraciones globales del proyecto y reportaba **15 errores
+falsos** en código de juego que `tsc` acepta. Un chequeo que miente sobre código que no se ha tocado
+no compensa los 10 s que ahorra.
+
+Además, SvelteKit avisa `tsconfig_extends_missing` en cada build (sugiere `extends: "$app/tsconfig"`).
+No se aplica: el `tsconfig.json` es de upstream y cambiarlo afecta a todo el repo por un aviso.
+
+### 14.4 Preview: viable, pero no en Workers Free
+
+Ver `docs/PREVIEW.md`. Resumen: el artefacto tiene 31 163 ficheros y el plan Free de Cloudflare
+admite 20 000 (Pages y Workers Static Assets); el de pago admite 100 000. Alternativas medidas:
+Static Assets + R2 (partiendo el artefacto), autohospedaje o GitHub Pages. **No se ha desplegado
+nada**, y el modo invitado está verificado: partida jugable, guardado en `localStorage` que sobrevive
+a una recarga y que el propio juego vuelve a encontrar (`sessionSlotId`), y cero peticiones a ningún
+API.
+
+---
+
+## 15. Próxima fase recomendada
 
 **Fase C (1–2 PRs pequeños):**
 
-1. `ServiceRegistry` con `reset()` para eliminar R1 (el mayor riesgo real de la integración actual).
-2. Reglas de `dependency-cruiser` que hagan cumplir las fronteras del §4 (las reglas ya existen para
-   `test/` y `scripts/`; añadir `src/host` y `src/routes`).
-3. `svelte-check` + `tsconfig.kit.json`.
-4. Ejecutar y estabilizar la suite Playwright en Windows/CI (incluida una navegación cliente real
-   para probar remontaje sin recarga).
+1. ~~Reglas de `dependency-cruiser` para las fronteras del §4~~ — **hecho en C.1** (§14.2).
+2. ~~`svelte-check`~~ — **hecho en C.1**; se ejecuta en `Bun CI`.
+3. ~~Estabilizar Playwright en CI, incluida la navegación cliente~~ — **hecho**: 6/6 en el PR #1 y
+   12/12 contra el artefacto compilado (§14).
+4. `ServiceRegistry` con `reset()`, **solo si** aparece una necesidad demostrable. Hoy no la hay: el
+   host es un singleton con *leases* y generaciones, y las pruebas de carreras cubren el ciclo de
+   vida. Introducirlo sin un caso que falle sería una abstracción sin valor.
+5. Decidir el despliegue de la preview con los números de `docs/PREVIEW.md` §5 (Workers Paid, R2 +
+   Static Assets, o autohospedaje) y, si se elige Cloudflare, generar el `manifest.json` de
+   cache-busting en el workflow.
 
 Después, **Fase D** empezando por los endpoints de solo lectura (`/game/titlestats`, `/daily/seed`) para
 tener el arnés de equivalencia Go↔Elysia funcionando antes de tocar autenticación o guardados.
