@@ -36,6 +36,7 @@ export interface ProbeSnapshot {
   playerHp: number | null;
   playerMaxHp: number | null;
   enemyPartySize: number | null;
+  sessionSlotId: number | null;
   leadMovePpUsed: number[];
 }
 

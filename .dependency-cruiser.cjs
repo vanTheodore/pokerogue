@@ -30,6 +30,73 @@ module.exports = {
         path: ["(^|/)scripts/"],
       },
     },
+    // #region Host boundaries (SvelteKit shell vs. game)
+    //
+    // The game is a Phaser application that happens to be *hosted* by SvelteKit. These rules
+    // keep that one-directional: `src/routes` (Svelte components) -> `src/host` (lifecycle) ->
+    // game. Nothing below `src/host` may know that Svelte exists, or the game code would stop
+    // being independently testable, buildable and mergeable with upstream.
+    {
+      name: "game-not-to-host",
+      comment:
+        "Game code depends on the SvelteKit host (`src/host`). The dependency goes the other way:"
+        + "\nthe host owns the Phaser lifecycle, the game must not know it exists."
+        + "\n`src/main.ts` is the exception: the legacy MPA entry point shares `bootGame` with the"
+        + "\nhost so the boot sequence has exactly one definition (see docs/MIGRATION-PLAN.md §3).",
+      severity: "error",
+      from: {
+        path: ["^src/"],
+        pathNot: ["^src/host/", "^src/routes/", "^src/main[.]ts$"],
+      },
+      to: {
+        path: ["^src/host/"],
+      },
+    },
+    {
+      name: "game-not-to-svelte",
+      comment:
+        "Game code depends on Svelte/SvelteKit. The game rules must not depend on the UI framework:"
+        + "\nthey are exercised by Vitest without SvelteKit's plugin, and keeping them framework-free"
+        + "\nis what makes the upstream game code mergeable.",
+      severity: "error",
+      from: {
+        path: ["^src/"],
+        pathNot: ["^src/host/", "^src/routes/"],
+      },
+      to: {
+        dependencyTypes: ["npm", "npm-dev", "npm-peer", "npm-optional"],
+        // dependency-cruiser matches these against the *resolved* module paths.
+        path: ["node_modules/svelte/", "node_modules/@sveltejs/"],
+      },
+    },
+    {
+      name: "host-not-to-sveltekit-app-modules",
+      comment:
+        "`$app/*` are SvelteKit virtual modules: they only exist inside SvelteKit's build pipeline,"
+        + "\nso the Vitest suite (which does not run the SvelteKit plugin) cannot resolve them."
+        + "\n`src/host/debug-bridge.ts` is the documented exception: it imports `$app/navigation`"
+        + "\n*dynamically*, only when the observation bridge is installed.",
+      severity: "error",
+      from: {
+        path: ["^src/host/"],
+        pathNot: ["^src/host/debug-bridge[.]ts$"],
+      },
+      to: {
+        path: ["^\\$app/"],
+      },
+    },
+    {
+      name: "host-not-to-routes",
+      comment: "The host must not import route components: routes own their components, not the reverse.",
+      severity: "error",
+      from: {
+        path: ["^src/host/"],
+      },
+      to: {
+        path: ["^src/routes/"],
+      },
+    },
+    // #endregion Host boundaries
     // #endregion Package Boundaries
     {
       name: "no-non-type-@type-exports",
