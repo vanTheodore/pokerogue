@@ -160,6 +160,10 @@ module.exports = {
       from: {},
       to: {
         couldNotResolve: true,
+        // SvelteKit's `$app/*` modules are virtual: they only exist inside the framework's
+        // build pipeline (and are typed by `@sveltejs/kit`), so there is no file on disk to
+        // resolve against. Every other unresolved import still fails the rule.
+        pathNot: ["^\\$app/"],
       },
     },
     {

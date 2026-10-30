@@ -56,9 +56,14 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "bun run start:kit",
+    // `--host 127.0.0.1` is explicit on purpose: without it Vite binds to `localhost`, which
+    // resolves to IPv6 `::1` on Linux, and the `url` probe below (IPv4) never connects.
+    command: "bun run start:kit --host 127.0.0.1",
     url: "http://127.0.0.1:8000",
     reuseExistingServer: !process.env.CI,
-    timeout: 180_000,
+    // The first run also optimises Phaser and its plugins, which is slow on CI runners.
+    timeout: 300_000,
+    stdout: "pipe",
+    stderr: "pipe",
   },
 });
