@@ -27,10 +27,49 @@
  * - `bun run build:kit` -> static SvelteKit build in `build/`
  */
 
+import { resolve } from "node:path";
 import adapter from "@sveltejs/adapter-static";
 import { sveltekit } from "@sveltejs/kit/vite";
-import { defineConfig, loadEnv, type UserConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin, type UserConfig } from "vite";
 import { sharedConfig } from "./vite.config.ts";
+
+/**
+ * Serve `#package.json` as a module instead of as a public file.
+ *
+ * @remarks
+ * SvelteKit serves the public directory (`assets`, i.e. the asset submodule) at the URL root,
+ * and that submodule ships its own `package.json`. The game imports `#package.json` for its
+ * version (title screen, save data, migrations), which the browser requests as
+ * `/package.json?import`; the static handler answered it with `application/json`, so the
+ * browser refused to load it as a module ("Failed to fetch dynamically imported module") and
+ * the game never booted — but only when the assets submodule was actually checked out, which
+ * is why it was invisible in a bare checkout.
+ *
+ * Resolving the specifier to an absolute path here routes it through Vite's own module
+ * pipeline instead. A `resolve.alias` entry cannot be used for this: it replaces the alias map
+ * SvelteKit installs, which breaks `#app/*` and the rest of the tsconfig paths.
+ */
+function packageJsonModule(): Plugin {
+  const file = resolve(process.cwd(), "package.json");
+
+  return {
+    name: "pokerogue:package-json-module",
+    enforce: "pre",
+    resolveId(id) {
+      return id === "#package.json" ? file : null;
+    },
+    configureServer(server) {
+      // Runs before SvelteKit's static-file middleware (same hook, earlier plugin): send the
+      // request to Vite's module pipeline via `/@fs/`, which nothing shadows.
+      server.middlewares.use((req, _res, next) => {
+        if (req.url?.startsWith("/package.json?")) {
+          req.url = `/@fs/${file.replace(/\\/g, "/")}?import`;
+        }
+        next();
+      });
+    },
+  };
+}
 
 // biome-ignore lint/style/noDefaultExport: required for Vite
 export default defineConfig(async config => {
@@ -67,6 +106,7 @@ export default defineConfig(async config => {
     appType: "custom",
     plugins: [
       ...(base.plugins ?? []),
+      packageJsonModule(),
       sveltekit({
         // The game is a client-only, canvas-first application: there is no server-side work
         // to do yet, so a static SPA build reproduces today's hosting exactly.

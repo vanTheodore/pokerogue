@@ -22,6 +22,8 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
+  // Warms the dev server (first-run dependency optimization) before any test boots the game.
+  globalSetup: "./e2e/global-setup.ts",
   fullyParallel: false,
   // The game boots a Phaser/WebGL app that loads thousands of atlases and typewrites its
   // messages with a per-character timer: software-rendered CI runners are slow, so the
@@ -34,6 +36,12 @@ export default defineConfig({
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: "http://127.0.0.1:8000",
+    // The game registers `service-worker.js` (shipped by the assets submodule) on load. A
+    // caching service worker in front of Vite's dev server serves stale module URLs, which
+    // breaks the dynamic import of `src/host/boot-game.ts` ("Failed to fetch dynamically
+    // imported module"). The production build is covered separately, so the suite runs without
+    // a service worker.
+    serviceWorkers: "block",
     trace: "retain-on-failure",
     video: "off",
   },

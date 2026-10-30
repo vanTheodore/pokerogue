@@ -702,7 +702,34 @@ lanzaba `children is not defined` y **la página no se montaba**. La verificaci�
 (códigos HTTP 200 y markup de `src/app.html`) no podía detectarlo: hacía falta un navegador. Es el
 motivo por el que los criterios de aceptación exigen Playwright y no solo «la página responde».
 
-### 13.6 Metadatos REUSE
+### 13.6 Tres defectos que solo aparecieron al ejecutar el juego de verdad
+
+La primera ejecución real del E2E (y del CI con el submódulo `assets` poblado) destapó tres
+fallos que ninguna comprobación anterior podía ver:
+
+1. **`children` sin declarar** en `src/routes/+layout.svelte` (Svelte 5): la página lanzaba
+   `children is not defined` y no montaba nada. Los sondeos HTTP seguían devolviendo 200 y el
+   markup de `src/app.html` era correcto (§13.5).
+2. **`/package.json` sombreado por el directorio público.** SvelteKit sirve `assets/` en la raíz
+   de URL, y el submódulo de assets trae su propio `package.json`. El juego hace
+   `import { version } from "#package.json"`, que el navegador pide como `/package.json?import`;
+   el manejador de ficheros estáticos respondía `application/json` y el navegador se negaba a
+   cargarlo como módulo (`Failed to fetch dynamically imported module`). Solo ocurría **con el
+   submódulo inicializado**, por eso no se vio antes. Arreglado en `vite.config.app.ts` con un
+   plugin `enforce: "pre"` que resuelve el especificador al fichero absoluto y redirige la
+   petición a `/@fs/`, sin tocar el código de upstream. Un `resolve.alias` **no** sirve: sustituye
+   el mapa de alias de SvelteKit y rompe `#app/*`.
+3. **Service worker en desarrollo.** El submódulo también trae `service-worker.js`; registrado
+   ante el servidor de desarrollo, sirve URLs de módulo obsoletas y rompe la carga dinámica. El
+   E2E lo bloquea (`serviceWorkers: "block"`) porque lo que se prueba es la aplicación, no la
+   caché; el build de producción conserva el service worker.
+
+Además, el primer arranque del servidor de desarrollo pre-optimiza Phaser mientras ya responde
+`200` en `/`, así que el primer test podía caer en `504 (Outdated Optimize Dep)`. `e2e/global-setup.ts`
+calienta el servidor una vez antes de la suite (y falla con un mensaje claro si el juego no monta),
+que es exactamente lo que hace Vite al terminar la optimización: recargar.
+
+### 13.7 Metadatos REUSE
 
 `bun.lock` se declara CC0-1.0/NONE junto al resto de lockfiles, `src/**/*.svelte` queda cubierto y
 `docs/MIGRATION-PLAN.md` lleva su cabecera SPDX (CC-BY-NC-SA-4.0, como el resto de `docs/`).
