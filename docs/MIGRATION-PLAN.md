@@ -32,10 +32,10 @@ Esta fase entrega:
 | Extracción del arranque de Phaser a un módulo reutilizable con contrato explícito | ✅ |
 | Garantía de instancia única / destrucción / HMR | ✅ Con pruebas |
 | Flujo de desarrollo con Bun (instalación, dev, build, test) | ✅ |
-| Pruebas unitarias de las nuevas fronteras | ✅ 25 pruebas, todas en verde |
+| Pruebas unitarias de las nuevas fronteras | ✅ 53 pruebas, todas en verde (7 ficheros) |
 | Build heredado (MPA) sin regresión de bundle | ✅ Medido (+0.5 kB, ver §10) |
 | Suite Vitest heredada | ⏳ En ejecución al cerrar la fase (ver §11) |
-| Verificación en navegador real (Playwright) | ⚠️ Arnés listo, **no ejecutable en este entorno** (§11.2) |
+| Verificación en navegador real (Playwright) | ✅ **6/6 pruebas** en Chromium real, local y en CI (§11.1) |
 | Backend Elysia | ❌ Fase D (no iniciada, a propósito) |
 
 **Lo que NO se ha hecho, y por qué:** no se migró el backend (el usuario lo pidió explícitamente),
@@ -500,12 +500,13 @@ Los workflows de upstream (pnpm) **se conservan y vuelven a estar en verde**: su
 | `bun install --frozen-lockfile` | ✅ (parche de `@material/material-color-utilities` y `overrides` de pnpm aplicados) |
 | `pnpm install --frozen-lockfile --lockfile-only` (pnpm 10.34.5, el de CI) | ✅ Tras regenerar `pnpm-lock.yaml`; ya no hay `ERR_PNPM_OUTDATED_LOCKFILE` (§13.1) |
 | `bun run typecheck` | ✅ Sin errores nuevos. Los 4 preexistentes vienen de `assets/` vacío (`pokemon-sprite.test.ts`) |
-| `bunx vitest run test/tests/host` | ✅ **32/32 pruebas, 6 ficheros** (ciclo de vida, carreras, imports de rutas, paridad de shell, espejo Bun↔pnpm) |
+| `bunx vitest run test/tests/host` | ✅ **53/53 pruebas, 7 ficheros** (ciclo de vida de la página y del host, carreras, reintento tras fallo de arranque, imports de rutas, paridad de shell, espejo Bun↔pnpm) |
 | `bunx tsc -p e2e/tsconfig.json` | ✅ |
 | `bun run build` (pipeline heredado) | ✅ `dist/` completo, `asset-manifest.json`, shell reescrito |
 | `bun run build:kit` (SvelteKit) | ✅ `build/` estático con `index.html` + `200.html` |
 | `bun run preview:kit` (artefacto estático) | ✅ `GET /` 200, CSS 8.200 B |
 | **`bunx playwright test` (Chromium real, WebGL por software)** | ✅ **6/6 pruebas** (`e2e/app.spec.ts`), incluida la partida completa hasta el primer turno de combate, y el remontaje por navegación cliente |
+| **E2E del primer turno (endurecido)** | ✅ No acepta estados intermedios: exige `turn` avanzado **y** vuelta a `CommandPhase`/`COMMAND`, o el fin del encuentro; además **PP gastado** (`leadMovePpUsed + 1`) y un `enemyHp` coherente con su máximo |
 | **CI del PR (todos los workflows)** | ✅ 17/17 checks en verde: `Bun CI`, `E2E (Chromium)` (4 min 17 s), los 5 shards de tests de upstream, `Run all linters`, `Game Data Exporter`, `Lint PR title`, REUSE |
 | Hosts del dev server (`allowedHosts`) | ✅ `localhost` 200 · host de preview explícito 200 · host arbitrario **403** (§13.4) |
 | Subconjunto de la suite heredada (`api` + `utils` + `scenes`) | ✅ **163 pasan / 4 fallan / 2 ficheros fallan**, idéntico al baseline `d7a5ecd` (§11.2) |
@@ -734,6 +735,39 @@ que es exactamente lo que hace Vite al terminar la optimización: recargar.
 
 `bun.lock` se declara CC0-1.0/NONE junto al resto de lockfiles, `src/**/*.svelte` queda cubierto y
 `docs/MIGRATION-PLAN.md` lleva su cabecera SPDX (CC-BY-NC-SA-4.0, como el resto de `docs/`).
+
+### 13.8 El botón «Try again» destruía el juego que acababa de arrancar
+
+La página pedía un *lease* del host al montar y lo liberaba en `retry()` antes de volver a arrancar.
+Si el arranque **inicial** había fallado no quedaba ningún otro *lease*, así que el juego recién
+creado se destruía en el mismo tick y la página volvía a `idle`: el reintento no reintentaba nada.
+
+Ahora hay un único camino de arranque, `PageGameLifecycle` (`src/host/page-lifecycle.ts`), que la
+página sólo instancia, arranca y para: montaje y reintento usan la misma llamada, `start()`, y el
+*lease* **se conserva** mientras la página siga montada. `stop()` sigue siendo idempotente y
+seguro durante el arranque (devuelve el *lease* si se para a mitad).
+
+Las 9 pruebas de `test/tests/host/page-lifecycle.test.ts` corren contra el host real con un
+bootstrapper inyectado. La prueba «should keep the instance alive when a failed boot is retried»
+falla si se reintroduce el defecto (4 de 9 fallan con `expected 'idle' to be 'running'`): arranque
+fallido (`status: "failed"`, `activeLeases: 0`) → `start()` → `status: "running"`,
+`activeLeases: 1`, `game === games[0]` y `games[0].destroy` no se ha llamado.
+
+### 13.9 El E2E del primer turno aceptaba un estado intermedio
+
+El criterio anterior era «se salió de `CommandPhase` o avanzó el contador», y `CommandPhase` se
+abandona en cuanto **empieza** la animación del movimiento: la prueba podía pasar sin que el
+turno se hubiese resuelto. El criterio actual sólo acepta estados **terminales**:
+
+- de vuelta al menú del jugador (`CommandPhase` + `uiModeName === "COMMAND"`) **y** con `turn`
+  avanzado — `Battle.turn` sólo lo incrementan `BattleScene.newBattle` y `TurnEndPhase`, que se
+  encola después de todos los movimientos del turno; o
+- el encuentro terminó (party rival vacía o `waveIndex` mayor) sin estar en `MovePhase`.
+
+Y además comprueba un efecto real e imposible de falsear con UI: el PP del movimiento inicial sube
+exactamente en uno (`leadMovePpUsed`, que `move-phase.ts` consume al usar el movimiento con
+independencia de impacto, fallo o inmunidad) y el `enemyHp` queda entre 0 y su máximo. El resultado
+se adjunta como anotación del test para poder diagnosticar un fallo desde el log de CI.
 
 ---
 

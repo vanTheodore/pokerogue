@@ -32,6 +32,11 @@ export interface ProbeSnapshot {
   partySize: number;
   turn: number | null;
   enemyHp: number | null;
+  enemyMaxHp: number | null;
+  playerHp: number | null;
+  playerMaxHp: number | null;
+  enemyPartySize: number | null;
+  leadMovePpUsed: number[];
 }
 
 /** Observable state of the host (mirrors `GameHostSnapshot`). */

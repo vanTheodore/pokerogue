@@ -41,6 +41,22 @@ export interface PokerogueProbe {
   readonly turn: number | null;
   /** Current HP of the first enemy Pokémon, `null` outside of a battle. */
   readonly enemyHp: number | null;
+  /** Max HP of the first enemy Pokémon, `null` outside of a battle. */
+  readonly enemyMaxHp: number | null;
+  /** Current and max HP of the player's lead Pokémon, `null` before the run starts. */
+  readonly playerHp: number | null;
+  readonly playerMaxHp: number | null;
+  /** How many Pokémon the enemy still has, `null` outside of a battle. */
+  readonly enemyPartySize: number | null;
+  /**
+   * PP consumed by each move of the player's lead Pokémon.
+   *
+   * @remarks
+   * PP is spent when a move is used, whatever the outcome (miss, immunity, immunity to the
+   * type, ...), so a change here proves the move was actually executed rather than that the UI
+   * merely left its menu.
+   */
+  readonly leadMovePpUsed: readonly number[];
 }
 
 /** Shape exposed on `window.__pokerogueHost__` in development builds. */
@@ -92,6 +108,15 @@ export function installDebugBridge(): void {
         partySize: globalScene.getPlayerParty?.().length ?? 0,
         turn: globalScene.currentBattle?.turn ?? null,
         enemyHp: globalScene.getEnemyParty?.()[0]?.hp ?? null,
+        enemyMaxHp: globalScene.getEnemyParty?.()[0]?.getMaxHp() ?? null,
+        playerHp: globalScene.getPlayerParty?.()[0]?.hp ?? null,
+        playerMaxHp: globalScene.getPlayerParty?.()[0]?.getMaxHp() ?? null,
+        enemyPartySize: globalScene.getEnemyParty?.().length ?? null,
+        leadMovePpUsed:
+          globalScene
+            .getPlayerParty?.()[0]
+            ?.getMoveset()
+            ?.map(move => move.ppUsed) ?? [],
       };
     },
     navigate: async (path: string): Promise<void> => {

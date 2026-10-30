@@ -54,10 +54,23 @@ describe("Host - SvelteKit route modules", () => {
 
     // The lifecycle contract lives in `#host/game-host`: the component may not touch Phaser.
     expect(page).not.toMatch(/from\s+"phaser"/);
-    // The component takes a lease (see the mount/unmount ordering guarantees in game-host.ts)
-    // rather than calling start()/dispose() directly.
-    expect(page).toContain("gameHost.acquire(");
-    expect(page).toContain(".release()");
+    // Lease bookkeeping lives in `PageGameLifecycle` (one code path for mount and retry, see
+    // the regression test "should keep the instance alive when a failed boot is retried").
+    // The component only starts and stops it.
+    expect(page).toContain("new PageGameLifecycle(");
+    expect(page).toContain("lifecycle.start()");
+    expect(page).toContain("lifecycle?.stop()");
+    // Acquiring/releasing leases by hand here is what produced the retry bug.
+    expect(page).not.toContain("gameHost.acquire(");
+    expect(page).not.toContain(".release()");
+  });
+
+  it("should keep the page lifecycle unit-testable", () => {
+    const lifecycle = readFileSync(join(ROUTES_DIR, "..", "host", "page-lifecycle.ts"), "utf-8");
+
+    // Same constraint as `game-host.ts`: this module is imported by the Vitest run.
+    expect(lifecycle).not.toMatch(/\$app\//);
+    expect(lifecycle).not.toMatch(/from\s+"phaser"/);
   });
 
   it("should not let the debug bridge leak into the host module", () => {

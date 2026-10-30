@@ -8,8 +8,10 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   hostSnapshot,
   navigateClientSide,
+  type ProbeSnapshot,
   press,
   pressUntil,
+  probe,
   seedReturningPlayer,
   waitForProbe,
   waitForRunningGame,
@@ -169,23 +171,64 @@ test.describe("Gameplay", () => {
     expect(inRun.waveIndex).toBe(1);
     expect(inRun.partySize).toBe(1);
 
-    // First battle: FIGHT -> first move. The turn counter only advances if the battle
-    // actually runs, so this is what proves the migrated host still plays the game.
+    // First battle: FIGHT -> first move.
     expect(inRun.turn).toBe(1);
 
     await pressUntil(page, "Enter", snapshot => snapshot.uiModeName === "FIGHT", "the move selection menu");
+    const beforeMove = (await probe(page))!;
+    expect(beforeMove.enemyHp).toBeGreaterThan(0);
+
     await press(page, "Enter", 1_500);
 
-    const afterFirstTurn = await waitForProbe(
-      page,
-      snapshot => snapshot.turn !== null && (snapshot.turn > 1 || snapshot.phase !== "CommandPhase"),
-      "the first turn to resolve",
-      120_000,
-    );
+    /**
+     * Wait for a *terminal* battle state, never a transitional one.
+     *
+     * @remarks
+     * An earlier version accepted "left `CommandPhase`", which becomes true the instant the
+     * move animation starts and therefore proves nothing about the move resolving. Only two
+     * states are accepted here, and both are reachable only after the whole turn — both
+     * sides' moves included — has resolved:
+     *
+     * - back at the player's command menu with the turn counter advanced. `Battle.turn` is
+     *   incremented by `TurnEndPhase`, which is queued after every move of the turn;
+     * - the encounter is over: the enemy party is empty or the run moved to another wave.
+     */
+    const turnResolved = (snapshot: ProbeSnapshot): boolean => {
+      const nextTurn = snapshot.turn !== null && snapshot.turn > (beforeMove.turn ?? 0);
+      const backToPlayer = snapshot.phase === "CommandPhase" && snapshot.uiModeName === "COMMAND";
+      const encounterOver =
+        snapshot.phase !== "MovePhase"
+        && (snapshot.enemyPartySize === 0 || (snapshot.waveIndex ?? 0) > (beforeMove.waveIndex ?? 0));
 
-    // Either the turn counter advanced, or the battle is already over (a wild encounter can
-    // end on turn 1 with a critical hit) — both prove the battle loop ran.
-    expect(afterFirstTurn.turn === null || afterFirstTurn.turn >= 1).toBe(true);
+      return (nextTurn && backToPlayer) || encounterOver;
+    };
+
+    const afterFirstTurn = await waitForProbe(page, turnResolved, "the first turn to resolve", 180_000);
+
+    // A move really ran: PP is spent when a move is used, whatever the outcome (hit, miss or
+    // a type immunity), so this cannot be satisfied by a UI transition.
+    const ppBefore = beforeMove.leadMovePpUsed.reduce((sum, pp) => sum + pp, 0);
+    const ppAfter = afterFirstTurn.leadMovePpUsed.reduce((sum, pp) => sum + pp, 0);
+    expect(ppAfter, "the selected move did not consume PP, so it never ran").toBe(ppBefore + 1);
+
+    // The battle state is a real one, not a half-initialised snapshot.
+    expect(afterFirstTurn.playerHp).not.toBeNull();
+    expect(afterFirstTurn.playerMaxHp).toBeGreaterThan(0);
+    expect(afterFirstTurn.enemyHp).toBeGreaterThanOrEqual(0);
+    expect(afterFirstTurn.enemyHp).toBeLessThanOrEqual(afterFirstTurn.enemyMaxHp!);
+
+    // Keep the outcome in the report so a failure is diagnosable from the CI log alone.
+    test.info().annotations.push({
+      type: "first turn",
+      description: JSON.stringify({
+        turn: [beforeMove.turn, afterFirstTurn.turn],
+        enemyHp: [beforeMove.enemyHp, afterFirstTurn.enemyHp],
+        playerHp: [beforeMove.playerHp, afterFirstTurn.playerHp],
+        phase: afterFirstTurn.phase,
+        wave: afterFirstTurn.waveIndex,
+      }),
+    });
+
     expect(pageErrors).toEqual([]);
   });
 });
