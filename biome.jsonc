@@ -36,6 +36,9 @@
       // TODO: lint css and html?
       "!!*.css",
       "!!*.html",
+      // Nested templates (e.g. SvelteKit's `src/app.html`) must stay byte-comparable with
+      // `index.html`; the shell parity test compares them, so do not reformat them here.
+      "!!**/*.html",
       // this file is too big
       "!src/data/balance/tm-species-map.ts"
     ]
@@ -400,6 +403,19 @@
                 ]
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/routes/**/*.svelte"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            // Biome only analyses `<script>` blocks in Svelte files, so anything referenced
+            // exclusively from markup (state read in the template, handlers bound via `onclick`)
+            // is reported as unused. The Svelte compiler catches real unused bindings.
+            "noUnusedVariables": "off"
           }
         }
       }

@@ -4,20 +4,39 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { defineConfig, loadEnv, type PluginOption, type UserConfig, type UserConfigFnPromise } from "vite";
+import { type ConfigEnv, defineConfig, loadEnv, type PluginOption, type UserConfig } from "vite";
+
+/**
+ * Options for {@linkcode sharedConfig}.
+ */
+export interface SharedConfigOptions {
+  /**
+   * Whether to enable the parts of the build that are specific to the legacy static
+   * MPA pipeline (`index.html` + `dist/asset-manifest.json`, written by
+   * `plugins/vite/static-shell-plugin.ts` and `plugins/vite/vite-minify-json-plugin.ts`).
+   *
+   * The SvelteKit host (`vite.config.app.ts`) builds through its own adapter instead,
+   * so it opts out. Defaults to `true` to keep Vitest and the existing `start:*`/`build:*`
+   * scripts byte-for-byte identical in behaviour.
+   */
+  legacyShell?: boolean;
+}
 
 /**
  * Default config object used for both Vitest and local dev runs.
  */
-export const sharedConfig: UserConfigFnPromise = async ({ mode }) => {
+export const sharedConfig = async (
+  { mode }: ConfigEnv,
+  { legacyShell = true }: SharedConfigOptions = {},
+): Promise<UserConfig> => {
   const opts = {
     clearScreen: false,
-    appType: "mpa",
+    ...(legacyShell ? { appType: "mpa" as const } : {}),
     build: {
       sourcemap: mode !== "production",
       chunkSizeWarningLimit: 10000,
       minify: "oxc",
-      manifest: true,
+      ...(legacyShell ? { manifest: true } : {}),
       rolldownOptions: {
         // TODO: Review if we even need this anymore in v8.0
         onwarn(warning, defaultHandler) {
@@ -64,10 +83,10 @@ export const sharedConfig: UserConfigFnPromise = async ({ mode }) => {
 
   if (!process.env.MERGE_REPORTS) {
     opts.plugins = [
-      (await import("./plugins/vite/vite-minify-json-plugin.ts")).minifyPublicJsonFiles(),
+      ...(legacyShell ? [(await import("./plugins/vite/vite-minify-json-plugin.ts")).minifyPublicJsonFiles()] : []),
       (await import("./plugins/vite/namespaces-i18n-plugin.ts")).LocaleNamespace(),
       (await import("unplugin-inline-enum/vite")).default({ scanDir: "src" }),
-      (await import("./plugins/vite/static-shell-plugin.ts")).staticShellPlugin(),
+      ...(legacyShell ? [(await import("./plugins/vite/static-shell-plugin.ts")).staticShellPlugin()] : []),
     ];
   }
   return opts;

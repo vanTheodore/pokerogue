@@ -19,6 +19,29 @@ PokéRogue is a browser based Pokémon fangame heavily inspired by the roguelite
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md), this includes instructions on how to set up the game locally.
 
+# Bun + SvelteKit host (experimental)
+
+This fork runs the game on [Bun](https://bun.sh) and hosts it in a [SvelteKit](https://svelte.dev/docs/kit)
+application. **Phaser still owns the game**: SvelteKit owns the document, routing and anything that
+lives outside the canvas.
+
+```sh
+bun run update-submodules   # assets + locales are required to actually play
+bun install                 # honours the pnpm overrides/patch mirrored in package.json
+
+bun run start:kit           # SvelteKit host  -> http://localhost:8000
+bun run start:dev           # legacy MPA pipeline (unchanged) -> http://localhost:8000
+
+bunx vitest run test/tests/host   # fast tests for the migrated boundaries
+bun run typecheck
+bun run build:kit           # static SvelteKit build in build/
+bun run test:e2e            # real Chromium (needs: bunx playwright install chromium)
+```
+
+Architecture, audit results, risks and the phased plan live in
+[docs/MIGRATION-PLAN.md](./docs/MIGRATION-PLAN.md). The upstream `pnpm` workflows are untouched; the
+Bun pipeline is additive until it reaches feature parity.
+
 # 📝 Credits
 
 > If this project contains assets you have produced and you do not see your name, **please** reach out, either [here on GitHub](https://github.com/pagefaultgames/pokerogue/issues/new) or via [Discord](https://discord.gg/pokerogue).
