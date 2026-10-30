@@ -35,7 +35,29 @@ import { sharedConfig } from "./vite.config.ts";
 // biome-ignore lint/style/noDefaultExport: required for Vite
 export default defineConfig(async config => {
   const { mode } = config;
-  const envPort = Number(loadEnv(mode, process.cwd()).VITE_PORT);
+  const env = loadEnv(mode, process.cwd(), "VITE_");
+  const envPort = Number(env.VITE_PORT);
+
+  /**
+   * Hostnames the dev server answers for.
+   *
+   * @remarks
+   * Vite 8 rejects unknown `Host` headers by default (DNS-rebinding protection). The game has
+   * no server-side routes, but the dev server is still an HTTP endpoint on the local machine,
+   * so the allowlist stays closed by default and is extended *explicitly*:
+   *
+   * - `localhost` / `127.0.0.1` / `[::1]` always (normal local development).
+   * - `VITE_DEV_ALLOWED_HOSTS="foo.example,bar.example"` for previews, LAN devices and tunnels.
+   *   `.example` style entries (leading dot) also allow all subdomains.
+   *
+   * `allowedHosts: true` is deliberately NOT used: it disables the protection entirely.
+   */
+  const extraAllowedHosts = (env.VITE_DEV_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map(host => host.trim())
+    .filter(Boolean);
+  const allowedHosts = ["localhost", "127.0.0.1", "[::1]", ...extraAllowedHosts];
+
   const base = await sharedConfig(config, { legacyShell: false });
 
   return {
@@ -62,10 +84,8 @@ export default defineConfig(async config => {
       // root-level files. The shared stylesheet (`./index.css`) and fonts live there, so the
       // project root has to stay servable in dev.
       fs: { allow: [process.cwd()] },
-      // Dev only: the host application is a canvas with no server routes, and dev servers
-      // are frequently reached through a proxy/tunnel with a different `Host` header
-      // (e.g. a remote preview). Production is served from the static build.
-      allowedHosts: true,
+      // Restrictive by default; extend via `VITE_DEV_ALLOWED_HOSTS` (see above).
+      allowedHosts,
     },
   } satisfies UserConfig;
 });

@@ -5,42 +5,24 @@
  */
 
 import { expect, type Page, test } from "@playwright/test";
-
-/**
- * Shape of the development-only debug bridge installed by `src/host/game-host.ts`.
- * Declared here (instead of importing game types) so the E2E suite stays independent
- * of the game's TypeScript project.
- */
-interface PhaserSceneKey {
-  scene: { key: string };
-}
-
-interface PhaserGameHandle {
-  scene: {
-    getScenes(active?: boolean): PhaserSceneKey[];
-    isActive(key: string): boolean;
-  };
-}
-
-interface GameHostBridge {
-  snapshot(): { status: "idle" | "starting" | "running" | "failed"; error: string | null; instancesCreated: number };
-  game(): PhaserGameHandle | null;
-}
-
-declare global {
-  interface Window {
-    __pokerogueHost__?: GameHostBridge;
-  }
-}
+import {
+  hostSnapshot,
+  navigateClientSide,
+  press,
+  pressUntil,
+  seedReturningPlayer,
+  waitForProbe,
+  waitForRunningGame,
+} from "./helpers.ts";
 
 /**
  * Acceptance tests for the SvelteKit host, run in a real Chromium against the real game.
  *
- * These cover the criteria that jsdom/Vitest cannot: WebGL rendering, the Svelte ->
- * Phaser lifecycle in a browser, and the "no duplicate instance" guarantee.
+ * These cover what jsdom/Vitest cannot: WebGL rendering, the Svelte -> Phaser lifecycle in a
+ * browser, the "exactly one live instance" guarantee, and a complete playable slice
+ * (title screen -> starter choice -> first battle).
  *
- * Prerequisites: initialized `assets`/`locales` submodules and
- * `bunx playwright install chromium`.
+ * Prerequisites: see `e2e/README.md` (initialised `assets` submodule and a Chromium build).
  */
 
 /** Uncaught page errors collected for the current test. */
@@ -49,47 +31,39 @@ let pageErrors: string[] = [];
 test.beforeEach(async ({ page }) => {
   pageErrors = [];
   page.on("pageerror", error => pageErrors.push(error.message));
+  await seedReturningPlayer(page);
 });
 
-/** Wait until the host has a running game instance (failing fast on a boot error). */
-async function waitForGame(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const host = window.__pokerogueHost__;
-      if (!host) {
-        return false;
-      }
-      const { status } = host.snapshot();
-      return status === "running" || status === "failed";
-    },
-    undefined,
-    { timeout: 120_000 },
-  );
-
-  const snapshot = await page.evaluate(() => window.__pokerogueHost__!.snapshot());
-  expect(snapshot.error, `game failed to boot: ${snapshot.error}`).toBeNull();
-  expect(snapshot.status).toBe("running");
+/** Boot the game and fail fast (with the host error) if it cannot start. */
+async function bootGame(page: Page): Promise<void> {
+  await page.goto("/");
+  await waitForRunningGame(page);
 }
 
-/** Wait until `LoadingScene` has handed over to `BattleScene` (the title screen). */
-async function waitForTitleScreen(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const game = window.__pokerogueHost__?.game();
-      return Boolean(game && game.scene.isActive("battle") && !game.scene.isActive("loading"));
-    },
-    undefined,
-    { timeout: 120_000 },
+/**
+ * Advance from boot to the title screen.
+ *
+ * @remarks
+ * A first run shows the intro tutorial pages and then asks for the player's gender
+ * (`SelectGenderPhase`); both are dismissed with SUBMIT. Rather than hard-coding how many
+ * presses that takes (it depends on the locale's text length and the runner's speed), this
+ * presses until the title screen is actually reached.
+ */
+async function reachTitleScreen(page: Page) {
+  return await pressUntil(
+    page,
+    "Enter",
+    snapshot => snapshot.phase === "TitlePhase" || snapshot.uiModeName === "TITLE",
+    "the title screen",
+    { maxPresses: 60, timeout: 180_000 },
   );
 }
 
 test.describe("SvelteKit host", () => {
   test("boots exactly one Phaser instance inside #app", async ({ page }) => {
-    await page.goto("/");
-    await waitForGame(page);
+    await bootGame(page);
 
-    const snapshot = await page.evaluate(() => window.__pokerogueHost__!.snapshot());
-    expect(snapshot.instancesCreated).toBe(1);
+    expect((await hostSnapshot(page)).instancesCreated).toBe(1);
 
     // One canvas, owned by #app, and it is the only one in the document.
     await expect(page.locator("#app canvas")).toHaveCount(1);
@@ -98,51 +72,120 @@ test.describe("SvelteKit host", () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test("starts both scenes and reaches the title screen", async ({ page }) => {
-    await page.goto("/");
-    await waitForGame(page);
+  test("reaches the title screen", async ({ page }) => {
+    await bootGame(page);
 
-    const scenes = await page.evaluate(() => {
-      const game = window.__pokerogueHost__!.game()!;
-      return game.scene.getScenes(false).map(scene => scene.scene.key);
-    });
+    const title = await reachTitleScreen(page);
 
-    expect(scenes).toContain("loading");
-    expect(scenes).toContain("battle");
-
-    await waitForTitleScreen(page);
+    expect(["TitlePhase"]).toContain(title.phase);
     expect(pageErrors).toEqual([]);
   });
 
-  test("loads the game fonts and serves the touch control shell", async ({ page }) => {
-    await page.goto("/");
-    await waitForGame(page);
+  test("loads the game fonts and renders the touch control shell", async ({ page }) => {
+    await bootGame(page);
 
+    // The pixel font is loaded through the SvelteKit asset pipeline; if it failed the game
+    // would render with a fallback font and this check would catch it.
     expect(await page.evaluate(() => document.fonts.check('16px "emerald"'))).toBe(true);
+
     await expect(page.locator("#touchControls")).toBeAttached();
     await expect(page.locator("#touchControls [data-key]").first()).toBeAttached();
   });
 
   test("does not duplicate the canvas across reloads", async ({ page }) => {
-    await page.goto("/");
-    await waitForGame(page);
+    await bootGame(page);
     await page.reload();
-    await waitForGame(page);
+    await waitForRunningGame(page);
 
     await expect(page.locator("canvas")).toHaveCount(1);
-    expect((await page.evaluate(() => window.__pokerogueHost__!.snapshot())).instancesCreated).toBe(1);
+    // A reload is a fresh document: the counter restarts at one instance.
+    expect((await hostSnapshot(page)).instancesCreated).toBe(1);
   });
 
-  test("accepts keyboard input on the title screen without errors", async ({ page }) => {
-    await page.goto("/");
-    await waitForGame(page);
-    await waitForTitleScreen(page);
+  /**
+   * A client-side navigation unmounts and remounts the page component *within the same
+   * document*. This is the case a naive `onMount`/`onDestroy` pair gets wrong: the unmount's
+   * teardown can destroy the instance the freshly mounted component already uses, or leak a
+   * second Phaser instance. Reloading the page does not test this (see the test above).
+   */
+  test("keeps a single game across a client-side navigation (remount)", async ({ page }) => {
+    await bootGame(page);
+    await reachTitleScreen(page);
+    const before = await hostSnapshot(page);
 
-    // Advancing the title screen must not throw and must keep a single canvas alive.
-    await page.keyboard.press("Enter");
-    await page.waitForTimeout(2_000);
+    await navigateClientSide(page, "/about");
+    // The canvas must disappear while the game route is unmounted...
+    await expect(page.locator("canvas")).toHaveCount(0);
 
+    await navigateClientSide(page, "/");
+    await waitForProbe(page, snapshot => snapshot.phase === "TitlePhase", "the title screen again", 180_000);
+
+    // ...and come back as a single, live instance.
     await expect(page.locator("canvas")).toHaveCount(1);
+    const after = await hostSnapshot(page);
+    expect(after.status).toBe("running");
+    expect(after.instancesCreated).toBe(before.instancesCreated + 1);
+    expect(after.activeLeases).toBe(1);
+    // Behaviour, not implementation: no duplicate canvases and no leaked leases.
+    await expect(page.locator("canvas")).toHaveCount(1);
+    expect(pageErrors).toEqual([]);
+  });
+});
+
+test.describe("Gameplay", () => {
+  test("plays from the title screen into the first battle", async ({ page }) => {
+    test.slow();
+
+    await bootGame(page);
+    await reachTitleScreen(page);
+
+    // Title -> "New Game" -> "Classic".
+    await pressUntil(
+      page,
+      "Enter",
+      snapshot => snapshot.uiModeName === "OPTION_SELECT" || snapshot.uiModeName === "STARTER_SELECT",
+      "the game mode menu",
+    );
+    const starterSelect = await pressUntil(
+      page,
+      "Enter",
+      snapshot => snapshot.uiModeName === "STARTER_SELECT",
+      "the starter selection screen",
+    );
+    expect(starterSelect.partySize).toBe(0);
+
+    // Pick the first starter: ACTION opens its menu, Enter chooses "Add to party".
+    await pressUntil(page, " ", snapshot => snapshot.uiModeName === "OPTION_SELECT", "the starter action menu");
+    await pressUntil(page, "Enter", snapshot => snapshot.uiModeName === "STARTER_SELECT", "the starter menu to close");
+
+    // Confirm the party (SUBMIT) and advance the battle intro messages.
+    const inRun = await pressUntil(
+      page,
+      "Enter",
+      snapshot => snapshot.uiModeName === "COMMAND" && snapshot.waveIndex !== null,
+      "the battle command menu",
+      { maxPresses: 60, timeout: 180_000 },
+    );
+    expect(inRun.waveIndex).toBe(1);
+    expect(inRun.partySize).toBe(1);
+
+    // First battle: FIGHT -> first move. The turn counter only advances if the battle
+    // actually runs, so this is what proves the migrated host still plays the game.
+    expect(inRun.turn).toBe(1);
+
+    await pressUntil(page, "Enter", snapshot => snapshot.uiModeName === "FIGHT", "the move selection menu");
+    await press(page, "Enter", 1_500);
+
+    const afterFirstTurn = await waitForProbe(
+      page,
+      snapshot => snapshot.turn !== null && (snapshot.turn > 1 || snapshot.phase !== "CommandPhase"),
+      "the first turn to resolve",
+      120_000,
+    );
+
+    // Either the turn counter advanced, or the battle is already over (a wild encounter can
+    // end on turn 1 with a critical hit) — both prove the battle loop ran.
+    expect(afterFirstTurn.turn === null || afterFirstTurn.turn >= 1).toBe(true);
     expect(pageErrors).toEqual([]);
   });
 });

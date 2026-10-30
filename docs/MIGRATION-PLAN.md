@@ -446,17 +446,32 @@ CI con Bun, análisis de bundle, precarga de assets, memoria, viabilidad de Clou
 
 ---
 
-## 9. CI (propuesta implementada en este PR)
+## 9. CI (implementado en este PR)
 
-`.github/workflows/bun-ci.yml` (nuevo, no sustituye a los de upstream):
+`.github/workflows/bun-ci.yml` es **aditivo**: no sustituye ni modifica los workflows de upstream.
+Contiene dos jobs:
+
+**`bun`** (rápido, ~5 min)
 
 - `bun install --frozen-lockfile`
-- `bun run typecheck` (permite fallar solo por `assets/`, que en CI sí está inicializado)
-- `bunx vitest run --shard` (mismos tests que upstream)
-- `bun run build` (pipeline heredado) y `bun run build:kit` (SvelteKit)
+- `bun run typecheck` (falla solo por `assets/`, que en CI sí está inicializado)
 - `bunx tsc -p e2e/tsconfig.json` (tipado del arnés E2E)
+- `bunx biome ci` sobre los ficheros nuevos/modificados
+- `bunx vitest run test/tests/host` (incluye las pruebas de ciclo de vida y de espejo Bun/pnpm)
+- `bun run build` (pipeline heredado) y `bun run build:kit` (SvelteKit) + artefacto
 
-Los workflows de upstream (pnpm) **se conservan tal cual** hasta que Bun sea el flujo único.
+**`e2e`** (lento, ~20-30 min, Chromium real)
+
+- `actions/checkout` con `submodules: false`; solo se inicializa `locales` (≈20 MB)
+- `actions/cache` sobre `assets/` con clave = SHA del submódulo `assets`
+- si no hay caché: **clon parcial + sparse checkout** del submódulo (`images/`, `fonts/`,
+  `battle-anims/` + ficheros de raíz, ≈380 MB en vez de ≈1.7 GB)
+- `bunx playwright install --with-deps chromium`
+- `bunx playwright test` (6 pruebas, ver `e2e/README.md`)
+- en caso de fallo sube `playwright-report/` y `test-results/` (trazas)
+
+Los workflows de upstream (pnpm) **se conservan y vuelven a estar en verde**: su único fallo era
+`ERR_PNPM_OUTDATED_LOCKFILE`, corregido regenerando `pnpm-lock.yaml` (§13.1).
 
 ---
 
@@ -464,15 +479,15 @@ Los workflows de upstream (pnpm) **se conservan tal cual** hasta que Bun sea el 
 
 | Criterio | Estado | Evidencia |
 | --- | --- | --- |
-| El juego inicia y llega a una partida real | ⚠️ **Pendiente de navegador** | `e2e/app.spec.ts` (boot + título + input). Arnés validado con `playwright test --list`; no ejecutable aquí (§11.2) |
-| Combate y transiciones funcionan | ⚠️ Pendiente | Suite heredada (jsdom) + Playwright |
-| Controles y sonido | ⚠️ Parcial | Controles táctiles verificados por paridad de markup; input de teclado en E2E |
-| Assets y traducciones cargan | ⚠️ Pendiente en este entorno (submódulo `assets` vacío) | `locales` sí inicializado; build dev y kit correctos |
-| Sin instancias duplicadas de Phaser | ✅ | 9 pruebas de `GameHost` + `instancesCreated` expuesto al navegador |
-| Regresiones de jugabilidad pasan | ⏳ | Suite Vitest en ejecución (§11.1) |
-| Flujo de desarrollo con Bun | ✅ | `bun install`, `bun run start:kit`, `build:kit`, `test`, `test:e2e` |
+| El juego inicia y llega a una partida real | ✅ **Ejecutado en Chromium** | `e2e/app.spec.ts`: título → partida nueva → modo clásico → elección de inicial → inicio de partida (oleada 1) |
+| Combate y transiciones funcionan | ✅ **Ejecutado** | `Gameplay › plays from the title screen into the first battle`: FIGHT → primer movimiento → turno resuelto |
+| Controles y sonido | ⚠️ Controles ✅ / sonido ⚠️ | Teclado real (SUBMIT/ACTION) en E2E; controles táctiles verificados por paridad de markup; **el audio no se verifica** (los assets de audio quedan fuera de la fixture de CI, ver `e2e/README.md`) |
+| Assets y traducciones cargan | ✅ | Fixture dispersa de `assets` (imágenes, fuentes, animaciones) + `locales`; la fuente `emerald` se comprueba con `document.fonts.check` |
+| Sin instancias duplicadas de Phaser | ✅ | 20 pruebas de `GameHost` (incluye carreras y remontajes) + E2E de recarga y de navegación cliente |
+| Regresiones de jugabilidad pasan | ✅ (con alcance declarado) | Suite heredada: 163 pasan / 4 fallan, **idéntico al baseline** `d7a5ecd`; suite completa pendiente en CI (§11.2) |
+| Flujo de desarrollo con Bun | ✅ | `bun install`, `bun run start:kit`, `build`, `build:kit`, `test`, `test:e2e` |
 | Sin degradación de rendimiento | ✅ (medido en build heredado) | Entry: 1.290,84 kB → 1.291,35 kB; gzip 301,24 → 301,38 kB; chunks auxiliares idénticos (§11.3) |
-| Cambios permiten seguir integrando upstream | ✅ | Solo 4 ficheros existentes modificados (`src/main.ts`, `vite.config.ts`, `tsconfig.json`, `.gitignore`, `biome.jsonc`, `package.json`); todo lo demás es nuevo |
+| Cambios permiten seguir integrando upstream | ✅ | Workflows de upstream intactos y en verde; solo ficheros de configuración existentes modificados |
 
 ---
 
@@ -482,40 +497,37 @@ Los workflows de upstream (pnpm) **se conservan tal cual** hasta que Bun sea el 
 
 | Comprobación | Resultado |
 | --- | --- |
-| `bun install` (347 + 27 paquetes, con parche y overrides de pnpm aplicados) | ✅ |
+| `bun install --frozen-lockfile` | ✅ (parche de `@material/material-color-utilities` y `overrides` de pnpm aplicados) |
+| `pnpm install --frozen-lockfile --lockfile-only` (pnpm 10.34.5, el de CI) | ✅ Tras regenerar `pnpm-lock.yaml`; ya no hay `ERR_PNPM_OUTDATED_LOCKFILE` (§13.1) |
 | `bun run typecheck` | ✅ Sin errores nuevos. Los 4 preexistentes vienen de `assets/` vacío (`pokemon-sprite.test.ts`) |
-| `bunx vitest run test/tests/host` | ✅ **28/28 pruebas, 5 ficheros** (26 s) |
-| `bunx biome check` (ficheros nuevos y modificados) | ✅ |
+| `bunx vitest run test/tests/host` | ✅ **32/32 pruebas, 6 ficheros** (ciclo de vida, carreras, imports de rutas, paridad de shell, espejo Bun↔pnpm) |
+| `bunx tsc -p e2e/tsconfig.json` | ✅ |
 | `bun run build` (pipeline heredado) | ✅ `dist/` completo, `asset-manifest.json`, shell reescrito |
 | `bun run build:kit` (SvelteKit) | ✅ `build/` estático con `index.html` + `200.html` |
-| `bun run start:kit` (dev) | ✅ Sirve `/` con `#app` y `#touchControls` como hijos directos de `body` |
-| `bunx playwright test --list` | ✅ 5 pruebas detectadas (config válida) |
-| `bunx tsc -p e2e/tsconfig.json` | ✅ |
-| `bun run preview:kit` (artefacto estático) | ✅ `GET /` 200, `#app`/`#touchControls` presentes, CSS 8.200 B servido con 200 |
-| Sondeo HTTP del dev server (`/_app/env.js`, `/src/host/game-host.ts`, `/index.css`) | ✅ 200 tras D7b |
-| `bun run depcruise` | ✅ Solo los 2 errores preexistentes de `assets/` |
-| `bunx ls-lint` | ✅ (con la excepción documentada para `src/routes/*.ts`) |
-| Subconjunto de la suite heredada (`api` + `utils` + `scenes`) | ✅ **163 pasan / 4 fallan / 2 ficheros fallan**, idéntico al baseline (§11.2) |
-| Suite Vitest completa | ⚠️ Iniciada y abortada: el reporter personalizado no emite hasta el final y el entorno (3 GB RAM) no la completó en ~1 h. Ver §11.2 |
+| `bun run preview:kit` (artefacto estático) | ✅ `GET /` 200, CSS 8.200 B |
+| **`bunx playwright test` (Chromium real, WebGL por software)** | ✅ **6/6 pruebas** (`e2e/app.spec.ts`), incluida la partida completa hasta el primer turno de combate, y el remontaje por navegación cliente |
+| Hosts del dev server (`allowedHosts`) | ✅ `localhost` 200 · host de preview explícito 200 · host arbitrario **403** (§13.4) |
+| Subconjunto de la suite heredada (`api` + `utils` + `scenes`) | ✅ **163 pasan / 4 fallan / 2 ficheros fallan**, idéntico al baseline `d7a5ecd` (§11.2) |
+| Suite Vitest completa | ⚠️ No completada en este entorno (3 GB RAM); se ejecuta en el CI de upstream |
 
 ### 11.2 No ejecutado (y por qué)
 
-- **Playwright en navegador real**: este entorno no tiene Chromium ni permite descargarlo
-  (`cdn.playwright.dev` está bloqueado). Las 5 pruebas E2E están escritas y tipadas, pero **no se han
-  ejecutado**. Para ejecutarlas en Windows 11: `bunx playwright install chromium && bun run test:e2e`.
-- **Partida real / combate**: requiere el submódulo `assets` (1.6 GB) y un navegador con WebGL.
-  Ambos ausentes aquí.
+- **Suite Vitest completa**: el repositorio tiene ~140 ficheros de test que tardan decenas de minutos
+  en 3 GB de RAM; se lanzó y no terminó en ~1 h (el reporter personalizado no emite salida parcial).
+  Como los cambios no tocan código de juego, se ejecutó un subconjunto significativo
+  (`test/tests/api`, `test/tests/utils`, `test/tests/scenes`) contra un worktree limpio de `d7a5ecd`
+  para descartar regresiones. **Acción en el PR:** el resultado completo llega del `tests.yml` de
+  upstream (5 shards), que vuelve a ejecutarse tras el arreglo del lockfile.
 - **Fallos del subconjunto heredado (no son regresiones):** `test/tests/scenes/battle-scene.test.ts` y
   `test/tests/utils/speed-order.test.ts` fallan por *timeout* de 20 s al cargar datos de animaciones
   (`src/data/battle-anims.ts` → `populateMoveAnim`), porque el submódulo `assets` está vacío en este
-  entorno. La misma ejecución en un worktree limpio de `d7a5ecd` da **exactamente** el mismo resultado
-  (2 ficheros / 4 pruebas / 163 pasan), por lo que no hay regresión atribuible a esta fase.
-- **Suite Vitest completa**: el repositorio tiene ~140 ficheros de test que tardan decenas de minutos
-  en 3 GB de RAM; se lanzó y no terminó en ~1 h (el reporter personalizado no emite salida parcial).
-  Como los cambios no tocan código de juego (solo `src/main.ts`, que ningún test importa), se ejecutó
-  en su lugar un subconjunto significativo: `test/tests/api`, `test/tests/utils` y
-  `test/tests/scenes` (arranque de Phaser en jsdom). **Acción en el PR:** adjuntar la ejecución
-  completa en una máquina con más recursos o en CI (`tests.yml` de upstream).
+  entorno. La misma ejecución sobre `d7a5ecd` en un worktree limpio da **exactamente** el mismo
+  resultado (2 ficheros / 4 pruebas / 163 pasan).
+- **Audio**: los assets de audio (~450 MB) quedan fuera de la fixture de CI y el runner no tiene
+  dispositivo de sonido. No se verifica que suene; se verifica que el juego no se detiene cuando un
+  fichero de audio falta (`e2e/README.md`).
+- **Backend / contratos cliente-servidor**: fuera de alcance en esta fase (Fase D). El E2E corre con
+  `VITE_BYPASS_LOGIN=1`, igual que el flujo de desarrollo de upstream.
 
 ### 11.3 Rendimiento (build heredado, mismo entorno, comparado con `d7a5ecd` en un worktree limpio)
 
@@ -533,13 +545,18 @@ extracción no añadió ninguna petición en cascada).
 
 1. `tsconfig_extends_missing`: SvelteKit sugiere extender su tsconfig. **Deliberado** (R9).
 2. `vite_config_overridden`: eliminado del config del host; no debería reaparecer.
-3. `prerender_http_error` para `/logo512.png` y `/manifest.webmanifest` cuando `assets/` está vacío.
+3. `prerender_http_error` para `/logo512.png` y `/manifest.webmanifest` cuando `assets/` está vacío
+   (en CI el submódulo está poblado y desaparece).
 4. Aviso de Biome sobre `noUnusedVariables` en `.svelte`: se desactivó **solo** para `src/routes/**/*.svelte`
    porque Biome no analiza el markup (§ D4).
 5. El service worker del pipeline heredado **no** se ha integrado aún en el host SvelteKit (Fase E).
 6. Los alias `#` de tsconfig no resuelven desde `.svelte` en el entorno SSR (D2b). Detectado al
    integrar el host y cubierto por un test; si SvelteKit/Vite lo arreglan, el test sigue siendo válido
    (imports relativos siempre funcionan).
+7. SvelteKit avisa `app_body_unwrapped` porque `%sveltekit.body%` va dentro de `<body>`: es
+   **intencionado**, `index.css` depende de que `#app`/`#touchControls` sean hijos directos (D4).
+8. `/manifest.json` (generado por el despliegue del juego, no por el repo de assets) devuelve 404 en
+   local. El cliente lo tolera (`src/init/init-manifest.ts` lo captura y continúa).
 
 ---
 
@@ -621,7 +638,78 @@ rankings diarios) **SQLite en modo WAL es suficiente para una instancia de desar
 
 ---
 
-## 13. Próxima fase recomendada
+## 13. Iteración de estabilización (revisión del PR #1)
+
+### 13.1 Lockfile de pnpm: se sincroniza, no se desactiva
+
+Los workflows de upstream fallaban con `ERR_PNPM_OUTDATED_LOCKFILE` porque `package.json` ganó
+dependencias sin regenerar `pnpm-lock.yaml`. Se regeneró con el pnpm del repo (10.34.5):
+
+- diff **puramente aditivo** (+238 líneas, 0 eliminadas): un importador y entradas nuevas;
+  ninguna versión existente cambió.
+- `pnpm install --frozen-lockfile --lockfile-only` pasa ⇒ el error de CI desaparece **sin** tocar
+  `frozen-lockfile` ni ningún workflow.
+- `pnpm-workspace.yaml` impone `minimumReleaseAge: 1440` (1 día). `@sveltejs/kit@3.1.1` y
+  `@sveltejs/adapter-static@4.0.1` se publicaron horas antes, así que se fijan `3.1.0` y `4.0.0`
+  en lugar de añadir excepciones a la política o instalar con `--no-frozen-lockfile`.
+
+### 13.2 Bun y pnpm: un solo manifiesto, verificado
+
+Bun 1.4 lee `pnpm-workspace.yaml` **una vez** y copia `overrides`, `patchedDependencies` y
+`onlyBuiltDependencies` a `package.json` (`overrides`, `patchedDependencies`, `trustedDependencies`);
+después solo mira `package.json`. Consecuencias verificadas empíricamente:
+
+- si se eliminan esos campos, `bun install` instala `@material/material-color-utilities` **sin el
+  parche** (el parche desaparece de `bun.lock` y de `node_modules`) y `typecheck` se rompe;
+- si upstream cambia `pnpm-workspace.yaml`, la copia queda obsoleta en silencio.
+
+Por eso se mantiene la copia y se añade `test/tests/host/tooling-mirror.test.ts`, que compara los tres
+bloques con `pnpm-workspace.yaml` y falla indicando el arreglo («edita `pnpm-workspace.yaml` y
+re-ejecuta `bun install`»).
+
+### 13.3 Ciclo de vida de Phaser: de «un singleton» a «un singleton sin carreras»
+
+`src/host/game-host.ts` se reescribió alrededor de dos invariantes:
+
+1. **Nunca se entrega una instancia muerta.** Cada `dispose()` incrementa una *generación*; un boot
+   captura la suya y, si cambió, destruye lo que acabó de crear y **rechaza** con
+   `GameHostDisposedError` en lugar de publicarlo. Antes, un `dispose()` durante el arranque devolvía
+   al llamador un `Phaser.Game` ya destruido.
+2. **El orden montar/desmontar no importa.** `acquire()` devuelve un *lease*; la instancia se destruye
+   cuando se libera el **último**. Un remontaje (HMR, navegación cliente) que monta antes de que el
+   componente anterior se desmonte ya no se queda sin juego.
+
+Además: `dispose()` es idempotente (una sola destrucción aunque se llame N veces), `start()` comparte
+un único boot entre llamadas concurrentes y la comprobación de *teardown en curso* va **antes** de la
+del boot en vuelo — precisamente el orden que un test encontró invertido en la primera versión (un
+`start()` que llegaba durante el desmontaje se unía al boot condenado en vez de arrancar uno nuevo).
+
+Las 20 pruebas de `test/tests/host/game-host.test.ts` son **discriminantes**: usan un bootstrapper
+inyectado y un boot resoluble a mano para reproducir de forma determinista «dispose durante boot»,
+«varios dispose a la vez», «montar antes de desmontar»… Si se elimina el arreglo, fallan.
+
+### 13.4 `server.allowedHosts`
+
+`allowedHosts: true` desactivaba la protección contra *DNS rebinding*. Ahora la lista es cerrada por
+defecto (`localhost`, `127.0.0.1`, `[::1]`) y se amplía explícitamente con
+`VITE_DEV_ALLOWED_HOSTS="host1,host2"` (admite sufijos con punto inicial). Verificado en este
+entorno: `localhost` → 200, host de preview declarado → 200, host arbitrario → **403**.
+
+### 13.5 El E2E encontró un fallo real que «compilaba»
+
+`src/routes/+layout.svelte` no declaraba `const { children } = $props()`, así que `{@render children()}`
+lanzaba `children is not defined` y **la página no se montaba**. La verificación de la Fase B
+(códigos HTTP 200 y markup de `src/app.html`) no podía detectarlo: hacía falta un navegador. Es el
+motivo por el que los criterios de aceptación exigen Playwright y no solo «la página responde».
+
+### 13.6 Metadatos REUSE
+
+`bun.lock` se declara CC0-1.0/NONE junto al resto de lockfiles, `src/**/*.svelte` queda cubierto y
+`docs/MIGRATION-PLAN.md` lleva su cabecera SPDX (CC-BY-NC-SA-4.0, como el resto de `docs/`).
+
+---
+
+## 14. Próxima fase recomendada
 
 **Fase C (1–2 PRs pequeños):**
 

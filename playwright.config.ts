@@ -23,6 +23,11 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
+  // The game boots a Phaser/WebGL app that loads thousands of atlases and typewrites its
+  // messages with a per-character timer: software-rendered CI runners are slow, so the
+  // timeouts are generous on purpose (flakiness here would hide real regressions).
+  timeout: 240_000,
+  expect: { timeout: 15_000 },
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   workers: 1,
@@ -35,7 +40,19 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // Escape hatch for environments where Playwright cannot download its own browser
+        // (offline machines, custom Chromium builds, restricted containers). CI installs
+        // the bundled Chromium and leaves this unset.
+        launchOptions: {
+          ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}),
+          // Phaser needs a WebGL context. Headless Chromium has no GPU, so force ANGLE's
+          // SwiftShader backend: this is a real WebGL implementation, just software-rendered
+          // (the same configuration used by CI runners).
+          args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+        },
+      },
     },
   ],
   webServer: {

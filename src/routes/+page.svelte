@@ -7,11 +7,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 import { onMount } from "svelte";
 // NOTE: relative import on purpose. tsconfig `#path` aliases are not resolvable from
 // `.svelte` files in SvelteKit's SSR environment (see test/tests/host/route-imports.test.ts).
-import { type GameHostSnapshot, gameHost } from "../host/game-host";
+import { installDebugBridge } from "../host/debug-bridge";
+import { GameHostDisposedError, type GameHostSnapshot, type GameLease, gameHost } from "../host/game-host";
 
 /**
  * The route's whole job is to own the game lifecycle:
- * mount -> `gameHost.start()`, unmount/hot-reload -> `gameHost.dispose()`.
+ * mount -> `gameHost.acquire()`, unmount/hot-reload -> `lease.release()`.
+ *
+ * A lease (instead of a bare start/dispose pair) keeps the game alive when the new
+ * component mounts *before* the previous one unmounts (client-side navigation, HMR),
+ * and guarantees the instance is destroyed only when the last consumer is gone.
  *
  * Ownership of the canvas container stays with `src/app.html` (`#app`) because
  * `index.css` sizes and centres it via `body > #app` selectors. Svelte therefore
@@ -23,22 +28,54 @@ let snapshot = $state<GameHostSnapshot>(gameHost.snapshot);
 let retrying = $state(false);
 
 onMount(() => {
+  // Development only: exposes the observation bridge the Playwright suite reads.
+  installDebugBridge();
+
   const unsubscribe = gameHost.subscribe(next => {
     snapshot = next;
   });
 
-  const container = document.getElementById(APP_CONTAINER_ID);
-  if (container) {
-    void gameHost.start({ parent: container }).catch(error => {
-      console.error("[host] Failed to start PokéRogue:", error);
-    });
-  } else {
-    console.error(`[host] #${APP_CONTAINER_ID} is missing from the page template; the game cannot mount.`);
+  let lease: GameLease | null = null;
+  let unmounted = false;
+  // Set when the boot was cancelled because this component went away; not an error.
+  let disposedDuringBoot = false;
+
+  async function mountGame(): Promise<void> {
+    const container = document.getElementById(APP_CONTAINER_ID);
+    if (!container) {
+      console.error(`[host] #${APP_CONTAINER_ID} is missing from the page template; the game cannot mount.`);
+      return;
+    }
+
+    const acquired = await gameHost.acquire({ parent: container });
+
+    if (unmounted) {
+      // The component was destroyed while booting: hand the claim straight back so the
+      // instance is not leaked.
+      await acquired.release();
+      return;
+    }
+    lease = acquired;
   }
 
+  mountGame().catch(error => {
+    if (error instanceof GameHostDisposedError) {
+      disposedDuringBoot = true;
+      return;
+    }
+    console.error("[host] Failed to start PokéRogue:", error);
+  });
+
   return () => {
+    unmounted = true;
     unsubscribe();
-    void gameHost.dispose();
+
+    const released = lease?.release() ?? Promise.resolve();
+    released.catch(error => {
+      if (!disposedDuringBoot) {
+        console.error("[host] Failed to dispose PokéRogue:", error);
+      }
+    });
   };
 });
 
@@ -50,10 +87,13 @@ async function retry(): Promise<void> {
 
   retrying = true;
   try {
-    await gameHost.dispose();
-    await gameHost.start({ parent: container });
+    const lease = await gameHost.acquire({ parent: container });
+    // Drop the extra claim immediately: the mount effect keeps its own.
+    await lease.release();
   } catch (error) {
-    console.error("[host] Retry failed:", error);
+    if (!(error instanceof GameHostDisposedError)) {
+      console.error("[host] Retry failed:", error);
+    }
   } finally {
     retrying = false;
   }

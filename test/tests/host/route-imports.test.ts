@@ -54,8 +54,19 @@ describe("Host - SvelteKit route modules", () => {
 
     // The lifecycle contract lives in `#host/game-host`: the component may not touch Phaser.
     expect(page).not.toMatch(/from\s+"phaser"/);
-    expect(page).toContain("gameHost.start(");
-    expect(page).toContain("gameHost.dispose(");
+    // The component takes a lease (see the mount/unmount ordering guarantees in game-host.ts)
+    // rather than calling start()/dispose() directly.
+    expect(page).toContain("gameHost.acquire(");
+    expect(page).toContain(".release()");
+  });
+
+  it("should not let the debug bridge leak into the host module", () => {
+    const host = readFileSync(join(ROUTES_DIR, "..", "host", "game-host.ts"), "utf-8");
+
+    // `game-host.ts` is imported by the Vitest suite, which does not run SvelteKit's Vite
+    // plugin: a `$app/*` import there would break the unit tests (and cannot be resolved).
+    expect(host).not.toMatch(/\$app\//);
+    expect(host).not.toContain("__pokerogueHost__");
   });
 
   it("should disable SSR for the canvas application", () => {
