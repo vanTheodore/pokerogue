@@ -19,6 +19,11 @@ dist-ssr
 build
 .pnpm-store
 
+# SvelteKit host app (see docs/MIGRATION-PLAN.md)
+.svelte-kit
+test-results
+playwright-report
+
 # Editor/OS directories and files (excluding `extensions.json` for devcontainer)
 *.code-workspace
 .vscode/*

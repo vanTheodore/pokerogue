@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: 2024-2025 Pagefault Games
 #
 # SPDX-License-Identifier: AGPL-3.0-only
+#
+# Commands run through Bun (see docs/MIGRATION-PLAN.md). The upstream pnpm-based CI
+# workflows are unaffected: they invoke the scripts directly rather than these hooks.
 
 pre-commit:
   skip:
@@ -10,21 +13,21 @@ pre-commit:
     biome-lint:
       # Disable colors as certain IDEs (such as VSCode) don't support it in the output pane.
       # Summary mode looks decent in plain ASCII anyhow
-      run: pnpm biome:staged --colors=off --reporter=summary
+      run: bun run biome:staged --colors=off --reporter=summary
       stage_fixed: true
     ls-lint:
-      run: pnpm exec ls-lint
+      run: bunx ls-lint
 
 post-merge:
   commands:
     update-submodules:
-      run: pnpm update-submodules
+      run: bun run update-submodules
     update-packages:
-      run: pnpm i
+      run: bun install
 
 post-checkout:
   commands:
     update-packages:
       # cf https://git-scm.com/docs/githooks#_post_checkout:
       # The 3rd argument is 1 for branch checkouts and 0 for file checkouts.
-      run: if test {3} -eq "1"; then pnpm i; fi
+      run: if test {3} -eq "1"; then bun install; fi

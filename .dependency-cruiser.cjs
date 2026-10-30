@@ -247,7 +247,16 @@ module.exports = {
     },
   ],
   options: {
-    exclude: [],
+    /*
+     * SvelteKit route files are resolved by framework convention, not by imports:
+     * they are "orphans" to dependency-cruiser, and `.svelte` -> `svelte` runtime imports
+     * look like dev-dependency violations because Svelte components are compiled away at
+     * build time. Their boundaries are enforced by `test/tests/host/*` plus the Vitest and
+     * Playwright suites instead. See docs/MIGRATION-PLAN.md §4.
+     */
+    exclude: {
+      path: ["^src/routes/"],
+    },
     /* Which modules not to follow further when encountered */
     doNotFollow: {
       /* path: an array of regular expressions in strings to match against */
