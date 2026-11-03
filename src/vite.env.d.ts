@@ -17,6 +17,11 @@ interface ImportMetaEnv {
   readonly VITE_DISCORD_CLIENT_ID?: string;
   readonly VITE_GOOGLE_CLIENT_ID?: string;
   readonly VITE_I18N_DEBUG?: "0" | "1";
+  /**
+   * Exposes the Playwright observation bridge (`window.__pokerogueHost__`) in a *built*
+   * artifact. Never set it for a public deployment: see `docs/PREVIEW.md`.
+   */
+  readonly VITE_ENABLE_DEBUG_BRIDGE?: "0" | "1";
   readonly VITE_WIKI_URL: string;
   readonly VITE_DISCORD_URL: string;
   readonly VITE_GITHUB_URL: string;

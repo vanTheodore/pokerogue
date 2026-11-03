@@ -48,6 +48,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      // `preview.spec.ts` asserts production-artifact behaviour (cache headers, SPA fallback,
+      // service worker, copied translations) that the dev server does not have by design. It
+      // runs in `playwright.build.config.ts` against `build/`.
+      testIgnore: ["**/preview.spec.ts"],
       use: {
         ...devices["Desktop Chrome"],
         // Escape hatch for environments where Playwright cannot download its own browser

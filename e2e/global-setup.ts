@@ -21,7 +21,7 @@ import { chromium, type FullConfig, type LaunchOptions } from "@playwright/test"
  * It fails loudly if the warm-up cannot reach a mounted app, so a genuinely broken boot is never
  * masked by this retry loop.
  */
-export default async function globalSetup(config: FullConfig): Promise<void> {
+async function warmUp(config: FullConfig, attempts: number, retryDelayMs: number): Promise<void> {
   const baseURL = config.projects[0]?.use?.baseURL;
   if (!baseURL) {
     throw new Error("globalSetup: no baseURL configured for the first project");
@@ -35,7 +35,6 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
 
   try {
     let lastError: unknown = null;
-    const attempts = 5;
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
@@ -45,7 +44,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
       } catch (error) {
         lastError = error;
         // Most likely a dependency re-optimization: the next load picks up the fresh bundle.
-        await page.waitForTimeout(2_000);
+        await page.waitForTimeout(retryDelayMs);
       }
     }
 
@@ -53,4 +52,11 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   } finally {
     await browser.close();
   }
+}
+
+/**
+ * Dev-server warm-up: retries, because the first load can race Vite's dependency optimization.
+ */
+export default async function globalSetup(config: FullConfig): Promise<void> {
+  await warmUp(config, 5, 2_000);
 }
