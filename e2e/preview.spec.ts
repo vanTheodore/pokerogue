@@ -32,13 +32,11 @@ const PRODUCTION_HOSTS = ["api.pokerogue.net", "apibeta.pokerogue.net", "127.0.0
  *
  * @remarks
  * - `/audio/...`: the audio assets (~450 MB) are outside the CI fixture (see `e2e/README.md`).
- * - `/manifest.json`: a cache-busting map of `path -> timestamp` that upstream's deploy workflow
- *   generates *outside* the repository (`prmanifest`, then rsync). Without it the game skips the
- *   `?t=` suffix (`src/utils/fetch-utils.ts`) and logs "Manifest not found"; nothing else changes.
- *   A static preview therefore ships without it, which is exactly what this test pins down.
+ * `/manifest.json` is *not* on this list: the build generates it (`scripts/preview/manifest.ts`),
+ * so a 404 there would be a real failure.
  */
 function isExpectedMissing(url: string): boolean {
-  return url.includes("/audio/") || url.endsWith("/manifest.json");
+  return url.includes("/audio/");
 }
 
 /** Boot the artifact and fail with the host error if it cannot start. */
@@ -79,6 +77,46 @@ test.describe("Static preview artifact", () => {
       const iconResponse = await request.get(`/${icon.src}`);
       expect(iconResponse.status(), `manifest icon ${icon.src}`).toBe(200);
       expect(iconResponse.headers()["content-type"]).toBe("image/png");
+    }
+  });
+
+  test("ships a cache-busting manifest whose entries address real files", async ({ request }) => {
+    const response = await request.get("/manifest.json");
+    expect(response.status()).toBe(200);
+    // The game fetches it with `cache: "no-store"`; the header must not contradict that.
+    expect(response.headers()["cache-control"]).toBe("no-store");
+
+    const body = (await response.json()) as { manifest: Record<string, unknown> };
+    const keys = Object.keys(body.manifest);
+    expect(keys.length).toBeGreaterThan(30_000);
+    expect(typeof body.manifest["/locales/en/menu.json"]).toBe("number");
+    expect(typeof body.manifest["/images/pokemon/1.png"]).toBe("number");
+
+    // The manifest must never advertise itself or a path the artifact cannot serve.
+    expect(keys).not.toContain("/manifest.json");
+    expect(keys.every(key => key.startsWith("/"))).toBe(true);
+
+    // Every entry the game could append `?t=` to must resolve. Sampling a spread of entries keeps
+    // this fast while covering the shapes that exist (sprites, animation JSON, fonts, locales).
+    const sample = [
+      "/images/pokemon/1.png",
+      "/fonts/pkmnems.ttf",
+      "/locales/en/menu.json",
+      ...keys.filter(key => key.startsWith("/battle-anims/")).slice(0, 2),
+      ...keys.filter(key => key.startsWith("/images/") && key.endsWith(".png")).slice(1000, 1003),
+    ];
+
+    for (const path of sample) {
+      const stamp = body.manifest[path];
+      expect(typeof stamp, `${path} is not in the manifest`).toBe("number");
+
+      const bare = await request.get(path);
+      expect(bare.status(), path).toBe(200);
+
+      // The URL the game actually builds (`getCachedUrl`) has to work *and* return those bytes.
+      const busted = await request.get(`${path}?t=${stamp}`);
+      expect(busted.status(), `${path}?t=${stamp}`).toBe(200);
+      expect(await busted.body()).toEqual(await bare.body());
     }
   });
 
@@ -181,29 +219,65 @@ test.describe("Static preview artifact", () => {
       { maxPresses: 60, timeout: 180_000 },
     );
     expect(inRun.waveIndex).toBe(1);
+    // A run-specific fingerprint: it lives in the save, and a new run cannot reproduce it.
+    expect(inRun.leadPokemonId).not.toBeNull();
 
-    /** Keys the guest save uses; `loggedInUser.username` is `"Guest"` with `VITE_BYPASS_LOGIN=1`. */
-    const readSave = (): Promise<Record<string, number>> =>
-      page.evaluate(() => Object.fromEntries(Object.entries(localStorage).map(([key, value]) => [key, value.length])));
+    /**
+     * SHA-256 and byte length of every `localStorage` value.
+     *
+     * @remarks
+     * Comparing lengths would pass on any corruption that preserves the size — a save written
+     * under a different key, a truncated-then-padded payload, or a value that changed entirely
+     * but happens to be as long as the old one. The digests compare the *content* of a ~500 kB
+     * save without moving it out of the browser.
+     */
+    const readSave = (): Promise<Record<string, { bytes: number; sha256: string }>> =>
+      page.evaluate(async () => {
+        const entries = await Promise.all(
+          Object.entries(localStorage).map(async ([key, value]) => {
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+            const sha256 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+            return [key, { bytes: value.length, sha256 }] as const;
+          }),
+        );
+        return Object.fromEntries(entries);
+      });
 
     const beforeReload = await readSave();
-    expect(beforeReload.sessionData_Guest, "no session was written to localStorage").toBeGreaterThan(1_000);
-    expect(beforeReload.data_Guest, "no system save was written to localStorage").toBeGreaterThan(1_000);
+    expect(beforeReload.sessionData_Guest?.bytes, "no session was written to localStorage").toBeGreaterThan(1_000);
+    expect(beforeReload.data_Guest?.bytes, "no system save was written to localStorage").toBeGreaterThan(1_000);
 
     // A reload throws away the whole JavaScript heap: anything that survives is on disk.
     await page.reload();
     await waitForRunningGame(page);
 
     const afterReload = await readSave();
-    expect(afterReload.sessionData_Guest).toBe(beforeReload.sessionData_Guest);
-    expect(afterReload.data_Guest).toBe(beforeReload.data_Guest);
+    expect(afterReload.sessionData_Guest).toEqual(beforeReload.sessionData_Guest);
+    expect(afterReload.data_Guest).toEqual(beforeReload.data_Guest);
 
-    // And the game can read it back on its own: at the title screen, `checkLastSaveSlot` scans
-    // the five slots and only assigns `sessionSlotId` when it finds and loads one. That is the
-    // difference between "the bytes are still in localStorage" and "the save is usable".
-    // Guest saves live in slot 0 (`sessionData_Guest`, see `getSessionDataLocalStorageKey`).
+    // And the game can read it back: at the title screen `checkLastSaveSlot` scans the five slots
+    // and only sets `sessionSlotId` when it finds *and parses* one. Guest saves live in slot 0
+    // (`sessionData_Guest`, see `getSessionDataLocalStorageKey`).
     const titleState = await pressUntil(page, "Enter", snapshot => snapshot.uiModeName === "TITLE", "the title screen");
     expect(titleState.sessionSlotId, "the game did not find the saved session").toBe(0);
     expect(titleState.waveIndex).toBeNull();
+
+    // With a session available the title screen's first entry is "Continue": SUBMIT resumes the
+    // run. Reaching the *command menu* again on the same wave and the same turn — with the party
+    // intact, i.e. without going through starter selection — is the difference between "the bytes
+    // are still in localStorage" and "the run is playable again".
+    //
+    // The `phase` is deliberately not used as the signal here: while the session is being
+    // restored the scene still reports `TitlePhase`, even though the battle data is already there.
+    const backInControl = await pressUntil(
+      page,
+      "Enter",
+      snapshot => snapshot.uiModeName === "COMMAND" && snapshot.waveIndex === inRun.waveIndex,
+      "the command menu of the resumed battle",
+      { maxPresses: 60, timeout: 180_000 },
+    );
+    expect(backInControl.turn, "the resumed run is not on the turn it was saved on").toBe(inRun.turn);
+    expect(backInControl.partySize, "the resumed run did not keep its party").toBe(1);
+    expect(backInControl.leadPokemonId, "the run that came back is not the saved one").toBe(inRun.leadPokemonId);
   });
 });

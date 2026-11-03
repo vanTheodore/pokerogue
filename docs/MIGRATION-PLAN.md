@@ -513,6 +513,7 @@ Los workflows de upstream (pnpm) **se conservan y vuelven a estar en verde**: su
 | **`bunx playwright test --config playwright.build.config.ts`** (artefacto servido estáticamente) | ✅ **12/12 pruebas** (6 de `app.spec.ts` + 6 de `preview.spec.ts`), ≈ 7 min |
 | `bun run svelte-check` | ✅ 0 errores (descarta un error de tipo inyectado a propósito en un `.svelte`) |
 | `bun run depcruise` | ✅ 1 269 módulos, 0 violaciones; las 4 reglas nuevas fallan con violaciones inyectadas |
+| `bun run test:preview` | ✅ **11/11** pruebas de despliegue (manifest, rutas, caché, 304, *path traversal*) |
 | **E2E del primer turno (endurecido)** | ✅ No acepta estados intermedios: exige `turn` avanzado **y** vuelta a `CommandPhase`/`COMMAND`, o el fin del encuentro; además **PP gastado** (`leadMovePpUsed + 1`) y un `enemyHp` coherente con su máximo |
 | **CI del PR (todos los workflows)** | ✅ 17/17 checks en verde: `Bun CI`, `E2E (Chromium)` (4 min 17 s), los 5 shards de tests de upstream, `Run all linters`, `Game Data Exporter`, `Lint PR title`, REUSE |
 | Hosts del dev server (`allowedHosts`) | ✅ `localhost` 200 · host de preview explícito 200 · host arbitrario **403** (§13.4) |
@@ -808,10 +809,38 @@ Lo que esto encontró:
   testeable el artefacto sin publicarlo.
 
 Resultado: `playwright.build.config.ts` sirve `build/` con `scripts/preview/serve-build.ts` (semántica
-de host estático) y ejecuta **las mismas** pruebas de aceptación: 6/6 de `app.spec.ts` (incluido el
-primer turno) más 6 de `preview.spec.ts` (cabeceras, manifest, fallback SPA, service worker,
-traducciones, guardado de invitado). Medidas: 31 163 ficheros / 314.7 MiB; 1 177 peticiones y
-31.3 MiB para llegar al título.
+de host estático) y ejecuta **las mismas** pruebas de aceptación: 6 de `app.spec.ts` (incluido el
+primer turno) más 8 de `preview.spec.ts` (cabeceras, manifest, *fallback* SPA, service worker,
+traducciones, guardado de invitado y su reanudación). Medidas: 31 163 ficheros / 314.7 MiB;
+1 177 peticiones y 31.3 MiB para llegar al título.
+
+### 14.1b Cache-busting: `manifest.json` generado y verificado
+
+C.1 dejó constancia de que el artefacto se servía **sin** `manifest.json` y de que el juego lo
+toleraba. Eso era una carencia, no una decisión: sin él, `getCachedUrl()` devuelve la URL sin `?t=` y
+un asset actualizado puede quedarse cacheado indefinidamente.
+
+Upstream lo genera **fuera del repositorio**: `deploy.yml` hace `rsync --no-times --checksum` y luego
+`~/prmanifest --inpath <dir> --outpath <dir>/manifest.json` en el servidor; como rsync conserva la
+mtime de lo que no reescribe, el sello es por fichero. La herramienta no es pública, así que el
+contrato se reconstruyó desde su único consumidor (`init-manifest.ts` + `fetch-utils.ts`).
+
+`scripts/preview/manifest.ts` reproduce forma (`{ "manifest": { "/ruta": sello } }`) y semántica, pero
+deriva el sello del **contenido** (48 bits de SHA-256): en un build limpio todos los ficheros se
+reescriben, así que un sello basado en mtime invalidaría todo en cada build. Resultado: 31 163
+entradas, 1.60 MiB (404 KiB gzip), 0,65 s.
+
+`artifact.ts` verifica las dos direcciones —ninguna entrada colgando, ningún fichero cacheable sin
+entrada, nada de auto-referencia— y **falla el build** si algo no cuadra. `scripts/preview/preview.test.ts`
+(11 pruebas, sin navegador) cubre el generador y las reglas del host contra un artefacto desechable
+(304 condicional, `immutable`, *fallback*, 404 de fichero, *path traversal*), y `e2e/preview.spec.ts`
+comprueba el artefacto servido, incluidas URLs `?t=` reales.
+
+El E2E de persistencia también se endureció: compara **SHA-256** de cada valor de `localStorage` (no
+longitudes, que aguantaban cualquier corrupción del mismo tamaño) y comprueba la reanudación real de
+la partida —«Continue» en el título → menú de combate en la misma oleada y turno, con el **mismo
+`Pokemon.id`**— mediante un `leadPokemonId` nuevo en el puente de observación. Borrar el guardado
+hace fallar la prueba («Timed out waiting for the command menu of the resumed battle»).
 
 ### 14.2 Fronteras en `dependency-cruiser`
 

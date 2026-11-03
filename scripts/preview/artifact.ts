@@ -20,6 +20,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
+import { MANIFEST_FILE, readCacheManifest } from "./manifest.ts";
 
 /** The production API host. A preview must never reference it (see `docs/PREVIEW.md`). */
 export const PRODUCTION_API_HOST = "api.pokerogue.net";
@@ -49,6 +50,8 @@ export interface ArtifactReport {
   readonly largestFiles: readonly { path: string; bytes: number }[];
   /** Number of files under `images/`, `fonts/` and `battle-anims/`. */
   readonly assetFileCount: number;
+  /** Entries of the cache-busting manifest, or `null` when it is missing or unusable. */
+  readonly manifestEntries: number | null;
   readonly problems: readonly ArtifactProblem[];
 }
 
@@ -159,14 +162,137 @@ export function inspectArtifact(root: string, expectations: ArtifactExpectations
   }
 
   const assetFileCount = files.filter(file => /^(images|fonts|battle-anims)\//.test(file.path)).length;
+  const manifestEntries = inspectCacheManifest(root, paths, problems);
 
   return {
     fileCount: files.length,
     totalBytes: files.reduce((total, file) => total + file.bytes, 0),
     largestFiles: [...files].sort((a, b) => b.bytes - a.bytes).slice(0, 5),
     assetFileCount,
+    manifestEntries,
     problems,
   };
+}
+
+/**
+ * Validate the cache-busting manifest against the files that are actually in the artifact.
+ *
+ * @remarks
+ * `getCachedUrl()` appends `?t=<stamp>` for every path the manifest lists, so a manifest is only
+ * useful if it is *complete* (an unlisted asset keeps whatever the CDN cached) and *honest* (a
+ * listed path that does not exist turns a 200 into a busted URL). Both directions are checked:
+ *
+ * - every key must resolve to a file in the artifact (no stale or invented paths);
+ * - every file the game can request through `getCachedUrl()` — `images/`, `battle-anims/`,
+ *   `fonts/`, `locales/` and the top-level JSON data files — must be listed;
+ * - the manifest must not list itself, and must not carry a shape the game ignores.
+ *
+ * @returns The number of entries, or `null` when the manifest is missing or unusable.
+ */
+function inspectCacheManifest(root: string, paths: ReadonlySet<string>, problems: ArtifactProblem[]): number | null {
+  if (!paths.has(MANIFEST_FILE)) {
+    problems.push({
+      code: "missing-manifest",
+      message:
+        `${MANIFEST_FILE} is missing: every asset would be served without a \`?t=\` cache-buster `
+        + "(see src/utils/fetch-utils.ts)",
+    });
+    return null;
+  }
+
+  let manifest: Record<string, number>;
+  try {
+    manifest = readCacheManifest(join(root, MANIFEST_FILE)).manifest;
+  } catch (error) {
+    problems.push({ code: "invalid-manifest", message: `${MANIFEST_FILE}: ${(error as Error).message}` });
+    return null;
+  }
+
+  const keys = Object.keys(manifest);
+  if (keys.length === 0) {
+    problems.push({ code: "empty-manifest", message: `${MANIFEST_FILE} has no entries` });
+    return 0;
+  }
+
+  inspectManifestEntries(manifest, keys, paths, problems);
+  reportUnlistedCacheableFiles(keys, paths, problems);
+
+  return keys.length;
+}
+
+/** A path is usable when it is absolute, stays inside the artifact and maps to a positive integer. */
+function isUsableEntry(key: string, stamp: unknown): boolean {
+  if (!key.startsWith("/") || key.includes("..") || key.includes("\\")) {
+    return false;
+  }
+  return typeof stamp === "number" && Number.isSafeInteger(stamp) && stamp > 0;
+}
+
+/** Keys that are malformed or that point at a file the artifact does not contain. */
+function inspectManifestEntries(
+  manifest: Record<string, number>,
+  keys: readonly string[],
+  paths: ReadonlySet<string>,
+  problems: ArtifactProblem[],
+): void {
+  const malformed: string[] = [];
+  const dangling: string[] = [];
+
+  for (const key of keys) {
+    if (!isUsableEntry(key, manifest[key])) {
+      malformed.push(key);
+    } else if (!paths.has(key.slice(1))) {
+      dangling.push(key);
+    }
+  }
+
+  if (malformed.length > 0) {
+    problems.push({
+      code: "malformed-manifest-keys",
+      message: `${MANIFEST_FILE} has ${malformed.length} unusable key(s), for example ${malformed.slice(0, 3).join(", ")}`,
+    });
+  }
+
+  if (dangling.length > 0) {
+    problems.push({
+      code: "dangling-manifest-entries",
+      message:
+        `${MANIFEST_FILE} lists ${dangling.length} path(s) the artifact does not contain, `
+        + `for example ${dangling.slice(0, 3).join(", ")}`,
+    });
+  }
+
+  if (keys.includes(`/${MANIFEST_FILE}`)) {
+    problems.push({
+      code: "self-referential-manifest",
+      message: `${MANIFEST_FILE} lists itself: its stamp would describe the previous build`,
+    });
+  }
+}
+
+/** Files the game fetches through `getCachedUrl()` but that the manifest does not list. */
+function reportUnlistedCacheableFiles(
+  keys: readonly string[],
+  paths: ReadonlySet<string>,
+  problems: ArtifactProblem[],
+): void {
+  // A `Set` of keys, not `keys.includes()`: this runs over ~30 000 files on every build.
+  const keySet = new Set(keys);
+  const unlisted = [...paths].filter(path => isCacheable(path) && !keySet.has(`/${path}`));
+
+  if (unlisted.length > 0) {
+    problems.push({
+      code: "unlisted-cacheable-files",
+      message:
+        `${unlisted.length} cacheable file(s) are not in ${MANIFEST_FILE}, for example `
+        + `${unlisted.slice(0, 3).join(", ")}: they could never be invalidated`,
+    });
+  }
+}
+
+/** Whether the game can append `?t=` to this path (see `getCachedUrl` call sites). */
+function isCacheable(path: string): boolean {
+  return /^(images|battle-anims|fonts|locales)\//.test(path) || (/^[^/]+\.json$/.test(path) && path !== MANIFEST_FILE);
 }
 
 /** Render a report for a log, including the numbers a deployment decision needs. */
@@ -175,6 +301,7 @@ export function formatReport(report: ArtifactReport, root: string): string {
   const lines = [
     `[artifact] ${relative(process.cwd(), root) || "."}: ${report.fileCount} files, ${megabytes(report.totalBytes)}`,
     `[artifact] ${report.assetFileCount} files under images/, fonts/ and battle-anims/`,
+    `[artifact] cache manifest: ${report.manifestEntries ?? "missing"} entries`,
     `[artifact] largest: ${report.largestFiles.map(file => `${file.path} (${megabytes(file.bytes)})`).join(", ")}`,
   ];
 

@@ -52,8 +52,9 @@ Tiempos medidos en este entorno (2 vCPU, software WebGL):
 | --- | --- |
 | `build:preview` (build + copia de locales + inspección) | **21–24 s** |
 | Inspección del artefacto | < 1 s |
-| `test:e2e:build` completo (12 pruebas) | **≈ 4 min** (3.9 min medidos) |
+| `test:e2e:build` completo (13 pruebas) | **≈ 11 min** (la recuperación de partida vuelve a jugar hasta el menú de combate) |
 | `test:e2e` de desarrollo (6 pruebas) | **≈ 3 min** (3.0 min medidos) |
+| `test:preview` (11 pruebas de despliegue, sin navegador) | **< 1 s** |
 | `svelte-check` (proyecto completo, 2 576 ficheros) | **≈ 49 s** |
 | `depcruise` (1 269 módulos) | **≈ 9 s** |
 
@@ -71,7 +72,7 @@ server. Cada fila es una diferencia verificada, no una suposición.
 | `index.html` vs `200.html` | — | `index.html` usa rutas **relativas** (`./_app/...`), `200.html` **absolutas** (`/_app/...`) | Un despliegue en subdirectorio funciona en `/`, pero el *fallback* profundo necesita raíz. No desplegar bajo un prefijo |
 | Service worker | Bloqueado en la suite (sirve módulos obsoletos) | Se registra y activa; hoy no tiene `fetch`, así que no cachea nada | No hay que "arreglarlo", pero conviene saber que existe y que ocupa el scope `/`. La suite de build lo deja activo y comprueba que no rompe nada |
 | `#package.json` | Requiere reescritura a `/@fs/` en el dev server (`packageJsonModule()`) | Se resuelve en build y queda dentro del bundle | En producción no se pide `/package.json`; el fichero del submódulo `assets` sigue servido en la raíz |
-| Cache-busting de assets | — | `/manifest.json` (mapa `ruta → timestamp`) lo genera upstream **fuera del repo** (`prmanifest` en `deploy.yml`) | Sin él, `getCachedUrl()` devuelve la URL sin `?t=`: correcto, pero los assets no llevan versión. Ver §5.4 |
+| Cache-busting de assets | — | `/manifest.json` (mapa `ruta → sello`) lo genera `scripts/preview/manifest.ts` tras el build; upstream lo produce **fuera del repo** con `prmanifest` en `deploy.yml` | Sin él, `getCachedUrl()` devuelve la URL sin `?t=` y un asset actualizado puede quedarse cacheado. Ver §6 |
 | Cabeceras | Las pone Vite | Las define el host | `/_app/immutable/**` → `immutable`; HTML → `no-cache`; resto, caché corta (§5.3) |
 | Tamaño del bundle | Miles de módulos ESM | 46 ficheros, 6.5 MiB (1.57 MiB gzip) en `_app/` | — |
 | Puente de observación | `import.meta.env.DEV` | Solo si el build se hizo con `VITE_ENABLE_DEBUG_BRIDGE=1` | Un build sin el flag **no contiene el puente**: la inspección del artefacto falla si lo encuentra |
@@ -172,7 +173,51 @@ exige tocar el juego, y 5 USD/mes es menos que el tiempo de ingeniería de la op
 
 ---
 
-## 6. Modo invitado: qué funciona y qué no
+## 6. Cache-busting: `manifest.json`
+
+El juego no confía en el nombre de los assets: `getCachedUrl()` (`src/utils/fetch-utils.ts`)
+consulta un mapa `ruta → sello` y añade `?t=<sello>` cuando la ruta está listada. Ese mapa es
+`/manifest.json`, que `src/init/init-manifest.ts` pide al arrancar y pasa a `initializeManifest()`.
+
+**Upstream** lo genera fuera del repositorio: `deploy.yml` hace `rsync --no-times --checksum` y luego
+ejecuta en el servidor `~/prmanifest --inpath <dir> --outpath <dir>/manifest.json`. Como rsync
+conserva la mtime de los ficheros que no reescribe, el sello resultante es *por fichero*: cambia
+exactamente cuando cambian sus bytes. La herramienta no es pública, así que el contrato se
+reconstruyó a partir de su único consumidor.
+
+**Aquí** lo genera `scripts/preview/manifest.ts`, con la misma forma y la misma semántica de
+invalidación, pero derivando el sello del **contenido** (12 dígitos hex de SHA-256, como entero):
+
+```json
+{ "manifest": { "/images/pokemon/1.png": 164138565624330, "/locales/en/menu.json": 276106637769655 } }
+```
+
+Por qué no la mtime: en un build limpio todos los ficheros se escriben de nuevo, así que un sello
+basado en mtime cambiaría **todos** los assets en cada build y rompería la caché sin motivo. El hash
+da la misma garantía (cambia si y solo si cambian los bytes) y además es reproducible.
+
+Reglas que respeta y que el build **verifica** (`scripts/preview/artifact.ts`):
+
+- solo lista ficheros que están dentro del artefacto: una ruta inventada convertiría un 200 en un
+  404 con `?t=`;
+- lista *todo* lo que el juego puede pedir con `getCachedUrl()` (`images/`, `battle-anims/`,
+  `fonts/`, `locales/` y los JSON de la raíz): lo que falte no se invalida nunca;
+- nunca se lista a sí mismo (su sello describiría el build anterior);
+- el servidor de referencia lo sirve con `Cache-Control: no-store`, igual que el `fetch` del juego.
+
+Medidas: **31 163 entradas**, 1.60 MiB en crudo (404 KiB con gzip), generado en **0,65 s**.
+
+Pruebas (todas ejecutables sin navegador salvo la última):
+
+| Prueba | Qué discrimina |
+| --- | --- |
+| `scripts/preview/preview.test.ts` (11) | forma del manifiesto, cobertura exacta del artefacto, estabilidad entre builds, cambio de sello solo del asset modificado, servidor: caché `immutable`, 304 condicional, *fallback* SPA, 404 de fichero ausente, *path traversal* |
+| `e2e/preview.spec.ts` → «ships a cache-busting manifest…» | el artefacto servido: `no-store`, >30 000 entradas, sin auto-referencia, y URLs `?t=` reales que devuelven los mismos bytes |
+| `build:preview` | falla el build si faltan, sobran o están mal formadas las entradas |
+
+---
+
+## 7. Modo invitado: qué funciona y qué no
 
 Verificado en el artefacto compilado, no en el dev server:
 
@@ -183,6 +228,8 @@ Verificado en el artefacto compilado, no en el dev server:
 | Guardado local | ✅ `data_Guest` (sistema) y `sessionData_Guest` (partida) en `localStorage` |
 | El guardado sobrevive a una recarga | ✅ bytes idénticos tras `page.reload()` |
 | El juego **encuentra** el guardado al volver | ✅ `sessionSlotId` = 0 en el título (lo asigna `TitlePhase.checkLastSaveSlot`) |
+| El guardado se compara por **contenido** | ✅ SHA-256 de cada valor de `localStorage`, byte a byte antes/después del `reload()` |
+| La partida **se reanuda** de verdad | ✅ «Continue» en el título → menú de combate en la misma oleada, mismo turno y **mismo `Pokemon.id`** que antes de recargar (un run nuevo no puede reproducir ese id) |
 | Cuentas, sesión, ranking, daily leaderboard | ❌ No existen sin servidor. `isLocalServerConnected` es `false` y el juego omite esas rutas en vez de fallar |
 
 Consecuencias prácticas para una preview en invitado:
@@ -196,7 +243,7 @@ Consecuencias prácticas para una preview en invitado:
 
 ---
 
-## 7. Condiciones para distribuir los assets
+## 8. Condiciones para distribuir los assets
 
 No es un detalle administrativo: es la parte que decide **si** puede haber preview pública.
 
@@ -219,7 +266,7 @@ No es un detalle administrativo: es la parte que decide **si** puede haber previ
 
 ---
 
-## 8. Qué queda sin verificar
+## 9. Qué queda sin verificar
 
 - **Despliegue real en Cloudflare** (no se ha creado cuenta, Worker ni R2; los números de §5 son
   límites documentados + medidas locales).
@@ -230,5 +277,7 @@ No es un detalle administrativo: es la parte que decide **si** puede haber previ
 - **Carga concurrente y ancho de banda** de una sesión completa (aquí solo se mide hasta el título y
   un turno de combate).
 - **PWA/offline**: el service worker no cachea; "añadir a inicio" no funciona sin conexión.
-- **`/manifest.json`**: se sirve 404 y el juego lo tolera (§3). Regenerarlo es trabajo de la fase de
-  despliegue, no de ésta.
+- **`manifest.json` de un despliegue real**: aquí se genera desde el artefacto y se valida, pero no
+  se ha comparado byte a byte con el que produce `prmanifest` en producción (esa herramienta no es
+  pública). La semántica —un sello por ruta que cambia solo cuando cambian los bytes— está probada;
+  el formato exacto (mtime en segundos en upstream, hash de contenido aquí) difiere a propósito (§6).

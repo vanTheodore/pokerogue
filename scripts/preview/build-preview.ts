@@ -33,6 +33,7 @@ import { existsSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertArtifact, formatReport, inspectArtifact } from "./artifact.ts";
+import { MANIFEST_FILE, writeCacheManifest } from "./manifest.ts";
 import { stageLocales } from "./stage-locales.ts";
 
 const projectRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -94,6 +95,14 @@ try {
   console.error(`[preview] ${(error as Error).message}`);
   process.exit(1);
 }
+
+// The cache-busting manifest the game fetches at boot. Written after `locales/` is staged, so
+// its entries describe the artifact as it will be served; `inspectArtifact` then verifies both
+// directions (no dangling entries, nothing cacheable left out).
+const manifest = writeCacheManifest(buildDir);
+console.log(
+  `[preview] wrote ${MANIFEST_FILE} for ${manifest.entries} files (${(manifest.bytes / 1024 / 1024).toFixed(2)} MiB)`,
+);
 
 const report = inspectArtifact(buildDir, { debugBridge });
 console.log(formatReport(report, buildDir));

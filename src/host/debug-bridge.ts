@@ -51,6 +51,15 @@ export interface PokerogueProbe {
   /** How many Pokémon the enemy still has, `null` outside of a battle. */
   readonly enemyPartySize: number | null;
   /**
+   * Identifier of the player's lead Pokémon, `null` before the run starts.
+   *
+   * @remarks
+   * `Pokemon.id` is generated when the Pokémon is created and stored in the session, so it is a
+   * stable, run-specific fingerprint: a *new* run can never reproduce it. That is what lets the
+   * E2E suite prove a save was resumed instead of silently starting another one.
+   */
+  readonly leadPokemonId: number | null;
+  /**
    * Save slot the scene is currently working with, `null` until one is selected.
    *
    * @remarks
@@ -137,6 +146,7 @@ export function installDebugBridge(): void {
         playerMaxHp: globalScene.getPlayerParty?.()[0]?.getMaxHp() ?? null,
         enemyPartySize: globalScene.getEnemyParty?.().length ?? null,
         sessionSlotId: globalScene.sessionSlotId ?? null,
+        leadPokemonId: globalScene.getPlayerParty?.()[0]?.id ?? null,
         leadMovePpUsed:
           globalScene
             .getPlayerParty?.()[0]

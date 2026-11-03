@@ -18,6 +18,7 @@
     "build:preview": "bun scripts/preview/build-preview.ts",
     "preview:static": "bun scripts/preview/serve-build.ts",
     "test:e2e:build": "playwright test --config playwright.build.config.ts",
+    "test:preview": "vitest run --config scripts/preview/preview.config.ts",
     "svelte-check": "svelte-check --tsconfig ./tsconfig.json --config ./vite.config.app.ts",
     "preview": "vite preview",
     "test": "vitest run",

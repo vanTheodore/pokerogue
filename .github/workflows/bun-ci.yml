@@ -59,6 +59,11 @@ jobs:
       - name: Host boundary tests
         run: bunx vitest run test/tests/host
 
+      - name: Preview deployment tests
+        # Manifest generation/invalidation and the static host's cache + routing rules, against a
+        # throwaway artifact: no browser and no 300 MiB build required.
+        run: bun run test:preview
+
       - name: Build (legacy MPA pipeline)
         run: bun run build
 
