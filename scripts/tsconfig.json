@@ -16,7 +16,10 @@
   // so it's safe to use glob syntax like this as files in `.github/scripts/` won't be grabbed
   // unless `.github/` is specifically added.
   "include": ["../**/*.ts"],
-  "exclude": ["../assets", "../locales", "../node_modules", "../dist", "**/*.boilerplate.ts"],
+  // `../e2e` is deliberately excluded: the Playwright harness is a standalone project with its
+  // own `e2e/tsconfig.json` (see that file) so that adding/changing it cannot affect the game's
+  // typechecking, and vice versa.
+  "exclude": ["../assets", "../locales", "../node_modules", "../dist", "../e2e", "**/*.boilerplate.ts"],
   "compilerOptions": {
     // Note: make sure more specific paths appear before less specific paths
     "paths": {
@@ -31,6 +34,7 @@
       "#enums/*": ["../src/enums/*.ts"],
       "#events/*": ["../src/events/*.ts"],
       "#field/*": ["../src/field/*.ts"],
+      "#host/*": ["../src/host/*.ts"],
       "#init/*": ["../src/init/*.ts"],
       "#inputs/*": ["../src/configs/inputs/*.ts"],
       "#modifiers/*": ["../src/modifier/*.ts"],

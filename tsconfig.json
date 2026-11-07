@@ -66,6 +66,7 @@
       "#enums/*": ["./src/enums/*.ts"],
       "#events/*": ["./src/events/*.ts"],
       "#field/*": ["./src/field/*.ts"],
+      "#host/*": ["./src/host/*.ts"],
       "#init/*": ["./src/init/*.ts"],
       "#inputs/*": ["./src/configs/inputs/*.ts"],
       "#modifiers/*": ["./src/modifier/*.ts"],

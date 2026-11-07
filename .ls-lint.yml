@@ -23,6 +23,11 @@ ls:
    src/system/version-migration/versions:
       .ts: snake_case
       <<: *cfg
+   # SvelteKit route files are `+page.ts`/`+layout.ts`/`+server.ts` by framework convention.
+   src/routes:
+      <<: *cfg
+      .ts: regex:\+[a-z]+
+      .*.ts: regex:\+[a-z]+
    test: *src
 ignore:
    - .pnpm-store
@@ -33,6 +38,8 @@ ignore:
    - assets
    - locales
    - dist
+   - build
+   - .svelte-kit
    - .devcontainer
    - "LICENSES"
    - .idea

@@ -160,6 +160,10 @@ module.exports = {
       from: {},
       to: {
         couldNotResolve: true,
+        // SvelteKit's `$app/*` modules are virtual: they only exist inside the framework's
+        // build pipeline (and are typed by `@sveltejs/kit`), so there is no file on disk to
+        // resolve against. Every other unresolved import still fails the rule.
+        pathNot: ["^\\$app/"],
       },
     },
     {
@@ -247,7 +251,16 @@ module.exports = {
     },
   ],
   options: {
-    exclude: [],
+    /*
+     * SvelteKit route files are resolved by framework convention, not by imports:
+     * they are "orphans" to dependency-cruiser, and `.svelte` -> `svelte` runtime imports
+     * look like dev-dependency violations because Svelte components are compiled away at
+     * build time. Their boundaries are enforced by `test/tests/host/*` plus the Vitest and
+     * Playwright suites instead. See docs/MIGRATION-PLAN.md §4.
+     */
+    exclude: {
+      path: ["^src/routes/"],
+    },
     /* Which modules not to follow further when encountered */
     doNotFollow: {
       /* path: an array of regular expressions in strings to match against */

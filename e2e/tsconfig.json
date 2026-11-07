@@ -1,0 +1,22 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Pagefault Games
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+{
+  // Standalone config: the E2E suite is intentionally not part of the game's `tsconfig.json`
+  // (which mirrors upstream) so that adding/changing it cannot affect game typechecking.
+  "include": ["./**/*.ts"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true
+  }
+}

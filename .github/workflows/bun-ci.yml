@@ -1,0 +1,137 @@
+name: Bun CI (SvelteKit host)
+
+# Additive workflow: the upstream pnpm workflows (`linting.yml`, `tests.yml`) stay untouched.
+# This job proves that the Bun + SvelteKit path installs, typechecks, tests and builds.
+# See docs/MIGRATION-PLAN.md §9.
+
+on:
+  push:
+    branches:
+      - "arena/**"
+  pull_request:
+    branches:
+      - beta
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bun:
+    name: Bun / typecheck / host tests / builds
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (game)
+        run: bun run typecheck
+
+      - name: Typecheck (E2E harness)
+        run: bunx tsc -p e2e/tsconfig.json
+
+      - name: Lint (new/changed files)
+        run: bunx biome ci src/host src/routes src/main.ts vite.config.ts vite.config.app.ts test/tests/host
+
+      - name: Host boundary tests
+        run: bunx vitest run test/tests/host
+
+      - name: Build (legacy MPA pipeline)
+        run: bun run build
+
+      - name: Build (SvelteKit host)
+        run: bun run build:kit
+
+      - name: Upload SvelteKit build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sveltekit-build
+          path: build
+          retention-days: 7
+
+  # Real-browser acceptance tests: the only place where the game actually boots, renders
+  # WebGL and plays a battle. See e2e/README.md.
+  e2e:
+    name: E2E (Chromium, real game)
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The assets submodule is populated sparsely below instead: a full checkout is
+          # ~1.7 GB, while the tests need ~380 MB (see the cache step).
+          submodules: false
+
+      - name: Check out translations
+        # Translations are small (~20 MB) and required by the i18n initialisation.
+        run: git submodule update --init --depth 1 locales
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Resolve the pinned assets revision
+        id: assets
+        run: echo "sha=$(git ls-tree HEAD assets | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the assets fixture
+        id: assets-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: assets
+          key: pokerogue-assets-${{ steps.assets.outputs.sha }}-images-fonts-battle-anims
+
+      - name: Fetch the assets fixture (sparse clone)
+        if: steps.assets-cache.outputs.cache-hit != 'true'
+        env:
+          ASSETS_SHA: ${{ steps.assets.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Partial clone + sparse checkout: only the blobs the tests need are downloaded
+          # (~380 MB instead of ~1.7 GB). `audio/` is excluded on purpose (see e2e/README.md).
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            https://github.com/pagefaultgames/pokerogue-assets.git /tmp/pokerogue-assets
+          git -C /tmp/pokerogue-assets sparse-checkout set images fonts battle-anims
+          git -C /tmp/pokerogue-assets fetch --depth 1 origin "$ASSETS_SHA"
+          git -C /tmp/pokerogue-assets checkout "$ASSETS_SHA"
+          rm -rf assets
+          cp -a /tmp/pokerogue-assets assets
+          rm -rf assets/.git
+
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run E2E suite
+        run: bunx playwright test
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
