@@ -408,6 +408,19 @@
       }
     },
     {
+      "includes": ["src/routes/**/*.svelte"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            // Biome only analyses `<script>` blocks in Svelte files, so anything referenced
+            // exclusively from markup (state read in the template, handlers bound via `onclick`)
+            // is reported as unused. The Svelte compiler catches real unused bindings.
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/data/balance/moves/egg-moves.ts"],
       "formatter": {
         "lineWidth": 150

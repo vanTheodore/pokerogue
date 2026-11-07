@@ -14,6 +14,8 @@ path = [
     "src/**/*.json",
     "test/**/*.json",
     "src/**/*.jsonc",
+    # Svelte components/routes introduced by the SvelteKit host (see docs/MIGRATION-PLAN.md)
+    "src/**/*.svelte",
     "global.d.ts",
     "plugins/**/*",
     # HTML / CSS at the top level, or in `tests`
@@ -50,10 +52,12 @@ path = [
     ".vscode/**/*.json",
     # any pokerogue save files for tests
     "**/*.prsv",
-    # pnpm related files of insignificant originality
+    # lockfiles of insignificant originality
     "package-lock.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
+    # Bun's lockfile (used by the Bun toolchain, see docs/MIGRATION-PLAN.md)
+    "bun.lock",
     # Miscellaneous files of insignificant originality
     ".nvmrc",
     "RELEASE",
