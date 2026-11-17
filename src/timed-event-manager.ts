@@ -390,5 +390,9 @@ export class TimedEventManager {
     this.disabled = true;
   }
 
-  // todo: add option to enable to allow for testing timed events
+  /** Restore module-level test/runtime state before a new game host boot. */
+  public reset(): void {
+    this.disabled = false;
+    this.cachedReplacementMap = null;
+  }
 }

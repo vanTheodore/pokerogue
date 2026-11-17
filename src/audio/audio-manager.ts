@@ -164,6 +164,12 @@ export class AudioManager {
     }
   }
 
+  /** Stop and release the currently owned background track during host teardown. */
+  public dispose(): void {
+    this.currentBgm?.destroy();
+    this.currentBgm = null;
+  }
+
   /**
    * Fades out the current bgm over `duration` ms.
    * @param duration - (Default `500`) The amount of time the fade out should take place over, in ms

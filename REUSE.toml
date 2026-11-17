@@ -28,6 +28,7 @@ path = [
     # Json files that can't be commented
     "package.json",
     "tsconfig.json",
+    "tsconfig.kit.json",
     "tsdoc.json",
     "typedoc.json",
     # environment files

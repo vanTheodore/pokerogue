@@ -249,14 +249,40 @@ module.exports = {
         dependencyTypes: ["npm-peer"],
       },
     },
+    {
+      name: "game-does-not-depend-on-sveltekit",
+      comment:
+        "The game engine must remain independent of the SvelteKit shell. Only `src/host` and `src/routes` may use Svelte or `$app/*` modules.",
+      severity: "error",
+      from: {
+        path: "^src/",
+        pathNot: ["^src/host/", "^src/routes/"],
+      },
+      to: {
+        path: ["^\\$app/", "^node_modules/(?:svelte|@sveltejs/kit)(?:/|$)"],
+      },
+    },
+    {
+      name: "routes-do-not-import-phaser",
+      comment:
+        "SvelteKit routes must use the host facade; importing Phaser directly bypasses GameHost lifecycle management.",
+      severity: "error",
+      from: {
+        path: "^src/routes/",
+      },
+      to: {
+        path: "^node_modules/phaser(?:/|$)",
+      },
+    },
   ],
   options: {
     /*
      * SvelteKit route files are resolved by framework convention, not by imports:
      * they are "orphans" to dependency-cruiser, and `.svelte` -> `svelte` runtime imports
      * look like dev-dependency violations because Svelte components are compiled away at
-     * build time. Their boundaries are enforced by `test/tests/host/*` plus the Vitest and
-     * Playwright suites instead. See docs/MIGRATION-PLAN.md §4.
+     * build time. The explicit `game-does-not-depend-on-sveltekit` and
+     * `routes-do-not-import-phaser` rules still enforce the architectural boundaries across
+     * the TypeScript dependency graph. See docs/MIGRATION-PLAN.md §4.
      */
     exclude: {
       path: ["^src/routes/"],

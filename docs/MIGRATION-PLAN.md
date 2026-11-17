@@ -6,8 +6,7 @@ SPDX-License-Identifier: CC-BY-NC-SA-4.0
 
 # Migración de PokéRogue a SvelteKit + Bun (+ Elysia en fase posterior)
 
-> **Estado:** Fase A (auditoría y diseño) completada · Fase B (integración inicial de SvelteKit) implementada y ejecutable.
-> Fases C, D y E diseñadas y **no** implementadas todavía.
+> **Estado:** Fases A y B completadas. Fase C en curso: limpieza explícita de servicios, typecheck de SvelteKit y reglas de arquitectura implementadas; persistencia, eventos y UI de cuenta siguen pendientes. Fases D y E aún no iniciadas.
 >
 > **Alcance de este documento:** estado original auditado, arquitectura objetivo, fronteras,
 > riesgos, decisiones técnicas, criterios de aceptación y qué se ha verificado realmente.
@@ -418,15 +417,17 @@ Este documento + inventario de contratos + riesgos + criterios de aceptación (�
 **No** se ha tocado: escenas, fases, UI del juego, `src/api/*`, backend, submodules, workflows de
 upstream.
 
-### Fase C — Separación de responsabilidades (siguiente recomendada)
+### Fase C — Separación de responsabilidades (en curso)
 
-1. `ServiceRegistry` explícito para `settings`/`audioManager`/`game-data` con `reset()` → elimina R1.
-2. Interfaces de persistencia: `SaveRepository` (sistema/sesión/slots) con implementaciones
+1. ✅ `ServiceRegistry` para `settings`, `audioManager`, `globalScene`, `speciesDataRegistry` y
+   `timedEventManager`; libera audio antes de destruir Phaser y limpia el estado después. `game-data`
+   es propiedad de la escena, así que se reinicia con ella y no requiere un singleton adicional.
+2. ⏳ Interfaces de persistencia: `SaveRepository` (sistema/sesión/slots) con implementaciones
    `LocalStorageRepository` y `HttpRepository`, para que las reglas no conozcan `fetch` ni `localStorage`.
-3. `GameEvents` tipados (unión discriminada) para eventos Phaser→Svelte (p. ej. "fase actual", "guardado").
-4. `svelte-check` + `tsconfig.kit.json` (resuelve R9); `dependency-cruiser` con la regla
-   "`src/**` (juego) no importa `svelte`/`$app/*`" y "`src/routes/**` no importa `phaser`".
-5. Primera UI Svelte real: pantalla de login/cuenta y panel de diagnóstico.
+3. ⏳ `GameEvents` tipados (unión discriminada) para eventos Phaser→Svelte (p. ej. "fase actual", "guardado").
+4. ✅ `svelte-check` + `tsconfig.kit.json` (configuración aparte para no cambiar el typecheck del juego);
+   `dependency-cruiser` impide que el motor importe `svelte`/`$app/*` y que `src/routes/**` importe Phaser.
+5. ⏳ Primera UI Svelte real: pantalla de login/cuenta y panel de diagnóstico.
 
 ### Fase D — Backend Elysia (paralelo, no big-bang)
 
@@ -771,16 +772,37 @@ se adjunta como anotación del test para poder diagnosticar un fallo desde el lo
 
 ---
 
+### 13.10 Fase C: primera tanda de límites y limpieza de servicios
+
+Desde la actualización de upstream se añadieron `svelte-check` y `tsconfig.kit.json`, manteniendo
+el `tsconfig.json` del juego intacto. El check se ejecuta contra la config SvelteKit real (`vite.config.app.ts`)
+y cubre los tipos generados de SvelteKit además de las declaraciones globales del juego. También se
+activaron reglas de `dependency-cruiser` para impedir dependencias del motor hacia SvelteKit y Phaser
+directo desde rutas.
+
+`ServiceRegistry` centraliza limpiezas en orden inverso: el audio se detiene mientras `globalScene`
+aún existe; después de `Phaser.Game.destroy()` se vacían los singletons que una nueva instancia debe
+volver a inicializar. Los fallos de una limpieza no impiden ejecutar las demás y se reportan como
+`AggregateError`. `game-data` pertenece a cada `BattleScene` y se libera con la escena, sin duplicar
+su ciclo de vida en otro registro.
+
+Verificado: typecheck del juego, `svelte-check` (0 errores/avisos), `dependency-cruiser` (1.270 módulos)
+y pruebas de host del registro. La suite completa no se vuelve a ejecutar aquí porque tarda más de
+12 minutos; las pruebas de host específicas sí se ejecutan tras cada cambio.
+
+---
+
 ## 14. Próxima fase recomendada
 
-**Fase C (1–2 PRs pequeños):**
+**Fase C (restante):**
 
-1. `ServiceRegistry` con `reset()` para eliminar R1 (el mayor riesgo real de la integración actual).
-2. Reglas de `dependency-cruiser` que hagan cumplir las fronteras del §4 (las reglas ya existen para
-   `test/` y `scripts/`; añadir `src/host` y `src/routes`).
-3. `svelte-check` + `tsconfig.kit.json`.
-4. Ejecutar y estabilizar la suite Playwright en Windows/CI (incluida una navegación cliente real
-   para probar remontaje sin recarga).
+1. Interfaces `SaveRepository` para separar la persistencia local y HTTP, con pruebas de equivalencia.
+2. `GameEvents` tipados para comunicar el estado de Phaser a Svelte sin acoplamiento directo.
+3. Primera UI Svelte real: login/cuenta y panel de diagnóstico, manteniendo la lógica de juego en Phaser.
+4. Ejecutar y estabilizar la suite Playwright en Windows/CI (incluida navegación cliente real para
+   probar remontaje sin recarga).
 
-Después, **Fase D** empezando por los endpoints de solo lectura (`/game/titlestats`, `/daily/seed`) para
-tener el arnés de equivalencia Go↔Elysia funcionando antes de tocar autenticación o guardados.
+Después, **Fase D** empieza en el repositorio del backend Go: congelar contratos y probar equivalencia
+con Elysia antes de mover endpoints de solo lectura (`/game/titlestats`, `/daily/seed`). No se retirará
+Go hasta completar la matriz de equivalencia. La **Fase E** de producción/despliegue requiere una
+revisión de carga y autorización explícita; no se desplegará automáticamente.

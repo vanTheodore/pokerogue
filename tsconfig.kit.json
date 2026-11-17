@@ -1,0 +1,24 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Pagefault Games
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "moduleDetection": "force"
+  },
+  "include": [
+    "global.d.ts",
+    "src/@types/**/*.d.ts",
+    "test/@types/**/*.d.ts",
+    "src/routes/**/*",
+    "src/host/**/*.ts",
+    ".svelte-kit/types/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "build", "assets", "locales"]
+}
