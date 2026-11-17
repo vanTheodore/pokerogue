@@ -41,6 +41,9 @@ jobs:
       - name: Typecheck (game)
         run: bun run typecheck
 
+      - name: Typecheck (SvelteKit host)
+        run: bun run typecheck:kit
+
       - name: Typecheck (E2E harness)
         run: bunx tsc -p e2e/tsconfig.json
 
@@ -49,6 +52,9 @@ jobs:
 
       - name: Host boundary tests
         run: bunx vitest run test/tests/host
+
+      - name: Enforce dependency boundaries
+        run: bun run depcruise
 
       - name: Build (legacy MPA pipeline)
         run: bun run build

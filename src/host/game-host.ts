@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
+import { serviceRegistry } from "#app/service-registry";
 import type Phaser from "phaser";
 
 /**
@@ -173,7 +174,7 @@ export class GameHost {
    * @throws {@linkcode GameHostDisposedError} if a concurrent dispose invalidated this boot
    */
   public async start(options: GameHostOptions): Promise<Phaser.Game> {
-    for (;;) {
+    while (true) {
       // A teardown is checked *before* the in-flight boot: while a teardown runs, the boot it
       // is unwinding is doomed (it will reject with `GameHostDisposedError`), so a caller that
       // arrives now must wait for the teardown and start its own instance instead of joining it.
@@ -278,7 +279,32 @@ export class GameHost {
     this.#game = null;
     this.#error = null;
 
-    game?.destroy(true);
+    const cleanupErrors: unknown[] = [];
+    try {
+      // BackgroundMusic still needs the live globalScene to release its Phaser sound/cache data.
+      serviceRegistry.beforeGameDestroy();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+
+    try {
+      game?.destroy(true);
+    } catch (error) {
+      cleanupErrors.push(error);
+    } finally {
+      try {
+        serviceRegistry.reset();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    if (cleanupErrors.length > 0) {
+      console.error(
+        "[host] Some game services failed to clean up:",
+        new AggregateError(cleanupErrors, "One or more game services failed to clean up"),
+      );
+    }
 
     this.#setSnapshot("idle", null);
   }
